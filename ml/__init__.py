@@ -1,6 +1,5 @@
-"""ML package exposing configuration, training utilities, and runtime classifier."""
+"""ML-пакет, предоставляющий обёртку классификатора для рантайма."""
 
 from .model import TransactionClassifier
-from .train import train_model
 
-__all__ = ["TransactionClassifier", "train_model"]
+__all__ = ["TransactionClassifier"]
