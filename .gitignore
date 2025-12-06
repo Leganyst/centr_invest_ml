@@ -27,5 +27,5 @@ dist/
 # OS files
 .DS_Store
 Thumbs.db
-
+.env
 catboost_info/
