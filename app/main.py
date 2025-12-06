@@ -1,4 +1,4 @@
-"""FastAPI application exposing inference endpoints."""
+"""REST-сервис для классификации транзакций."""
 
 from __future__ import annotations
 
@@ -14,26 +14,32 @@ from . import schemas
 from .config import get_settings
 from .ml_adapter import get_classifier_or_503, load_classifier, predict_dataframe
 
-LOGGER = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+logger = logging.getLogger("transaction_backend")
 settings = get_settings()
 
 app = FastAPI(title="Transaction Classifier API", version="0.1.0")
 
 
 @app.on_event("startup")
-def _startup() -> None:  # pragma: no cover - framework hook
+def startup_event() -> None:  # pragma: no cover
+    """Загружаем модель при запуске сервиса."""
     try:
         load_classifier()
-    except Exception as exc:
-        LOGGER.exception("Classifier failed to load on startup: %s", exc)
+        logger.info("Модель успешно загружена из %s", settings.model_path)
+    except Exception as exc:  # pragma: no cover
+        logger.exception("Не удалось загрузить модель при старте: %s", exc)
 
 
 @app.get("/api/health", response_model=schemas.HealthResponse)
 def healthcheck() -> schemas.HealthResponse:
-    model_loaded = False
+    """Проверка готовности сервиса и загрузки модели."""
+    model_loaded = True
     try:
         get_classifier_or_503()
-        model_loaded = True
     except HTTPException:
         model_loaded = False
     return schemas.HealthResponse(
@@ -48,28 +54,19 @@ def healthcheck() -> schemas.HealthResponse:
     response_model=schemas.CSVUploadResponse,
     summary="Классификация транзакций из CSV",
     response_description=(
-        "JSON с метаданными (`meta`), агрегатами (`summary`), "
-        "списком строк (`rows`) и метриками качества (`metrics`). "
-        "`summary.by_category` используется для круговых/столбчатых диаграмм, "
-        "`summary.timeseries` — для графика по месяцам, а `rows` — для таблицы/ручной корректировки."
+        "JSON с метаданными (`meta`), агрегатами (`summary`), строками (`rows`) и метриками (`metrics`). "
+        "`summary.by_category` подходит для диаграмм по категориям, "
+        "`summary.timeseries` — для графика по месяцам, а `rows` можно выводить в таблицу."
     ),
 )
 async def upload_transactions(file: UploadFile = File(...)) -> schemas.CSVUploadResponse:
-    """
-    Загрузка CSV и получение данных для фронта.
-
-    Возвращает JSON следующего вида:
-    - `meta`: количество строк в файле, сколько удалось обработать, тип/версия модели.
-    - `summary.by_category`: список объектов `{category, count, amount}` — удобно для круговых/бар-чартов.
-    - `summary.timeseries`: массив периодов `YYYY-MM` с суммой операций и разбиением по категориям.
-    - `rows`: массив строк для табличного отображения; содержит исходные значения и `predicted_category`.
-    - `metrics`: если в CSV была колонка `Category`, здесь будут `macro_f1` и `balanced_accuracy`.
-    """
+    """Принимает CSV, классифицирует транзакции и возвращает данные для фронта."""
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="VALIDATION_ERROR: файл должен иметь расширение .csv",
         )
+
     raw_bytes = await file.read()
     try:
         df = pd.read_csv(io.BytesIO(raw_bytes))
@@ -88,19 +85,19 @@ async def upload_transactions(file: UploadFile = File(...)) -> schemas.CSVUpload
         )
 
     total_rows = len(df)
-    df_clean = df.copy()
-    df_clean["Date"] = pd.to_datetime(df_clean["Date"], errors="coerce")
-    for col in ["Withdrawal", "Deposit", "Balance"]:
-        df_clean[col] = pd.to_numeric(df_clean[col], errors="coerce")
+    logger.info("Получен CSV %s, строк: %d", file.filename, total_rows)
 
-    df_valid = df_clean.dropna(subset=["Date", "Withdrawal", "Deposit", "Balance"])
+    df_valid, labels, probas = predict_dataframe(df)
     processed_rows = len(df_valid)
     failed_rows = total_rows - processed_rows
-
-    labels, probas = predict_dataframe(df_valid[["Date", "Withdrawal", "Deposit", "Balance"]])
+    logger.info("Прогноз завершён: обработано=%d, не прошло валидацию=%d", processed_rows, failed_rows)
 
     amount_series = df_valid["Withdrawal"].where(df_valid["Withdrawal"] > 0, df_valid["Deposit"]).fillna(0.0)
-    df_enriched = df_valid.assign(predicted=labels, amount=amount_series, period=df_valid["Date"].dt.to_period("M").astype(str))
+    df_enriched = df_valid.assign(
+        predicted=labels,
+        amount=amount_series,
+        period=df_valid["Date"].dt.to_period("M").astype(str),
+    )
 
     category_summary = (
         df_enriched.groupby("predicted")
@@ -124,14 +121,12 @@ async def upload_transactions(file: UploadFile = File(...)) -> schemas.CSVUpload
 
     timeseries_entries = []
     if not df_enriched.empty:
-        pivot = (
-            df_enriched.pivot_table(
-                index="period",
-                columns="predicted",
-                values="amount",
-                aggfunc="sum",
-                fill_value=0.0,
-            )
+        pivot = df_enriched.pivot_table(
+            index="period",
+            columns="predicted",
+            values="amount",
+            aggfunc="sum",
+            fill_value=0.0,
         )
         total_amount = pivot.sum(axis=1)
         for period, row in pivot.iterrows():
@@ -200,9 +195,16 @@ async def upload_transactions(file: UploadFile = File(...)) -> schemas.CSVUpload
         balanced_accuracy=balanced_acc,
     )
 
-    return schemas.CSVUploadResponse(
+    response_payload = schemas.CSVUploadResponse(
         meta=meta,
         summary=summary,
         rows=rows,
         metrics=metrics,
     )
+    logger.info(
+        "Файл %s обработан: категорий=%s, метрики=%s",
+        file.filename,
+        {item.category: item.count for item in summary_by_category},
+        {"macro_f1": macro_f1, "balanced_acc": balanced_acc},
+    )
+    return response_payload
