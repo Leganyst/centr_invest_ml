@@ -5,6 +5,7 @@ import contextlib
 from app.deps import create_container
 from app.schemas import health
 from app.routes import router
+from app.routes.category_classifier import router as category_router
 
 
 @contextlib.asynccontextmanager
@@ -18,4 +19,5 @@ def create_app() -> FastAPI:
     container = create_container()
     setup_dishka(container, app=app)
     app.include_router(router)
+    app.include_router(category_router)
     return app

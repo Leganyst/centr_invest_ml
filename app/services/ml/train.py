@@ -33,7 +33,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
 
-from . import config
+from ....ml.trainee import config
 
 logger = logging.getLogger(__name__)
 

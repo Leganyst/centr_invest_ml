@@ -13,12 +13,11 @@ build/
 dist/
 *.egg-info/
 
-# Data artifacts
-/ml/models/
-/ml/data/*.joblib
-
 # Jupyter checkpoints
 .ipynb_checkpoints/
+
+# ml trainee
+/ml/trainee
 
 # IDE files
 .idea/
