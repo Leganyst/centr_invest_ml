@@ -56,7 +56,9 @@ uvicorn app.main:app --reload
   - `summary.by_category` — список для круговой диаграммы (категория, количество, сумма).
   - `summary.timeseries` — массив сагрегированных сумм по месяцам, пригодный для линейного графика (вложенный словарь `by_category` можно перекладывать в stacked-график).
   - `rows` — подробные строки (дата, суммы, предсказанная категория, вероятности, опционально реальная категория, если была колонка `Category`).
-  - `metrics` — `macro_f1` и `balanced_accuracy`, если в исходном CSV была целевая колонка.
+  - `metrics` — `macro_f1`, `balanced_accuracy`, `accuracy`, если в исходном CSV была колонка `Category`.
+- `GET /api/ml/report` — глобальные метрики обученной модели (accuracy/macro F1/balanced accuracy, матрица ошибок, пер-класс статистика и топ фичей). Эти данные фронт может использовать для построения dashboards.
+- `GET /api/ml/export/train` и `GET /api/ml/export/test` — скачивание CSV-сплитов, на которых модель обучалась/валидировалась.
 
 ## Запуск в Docker
 

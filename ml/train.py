@@ -1,5 +1,6 @@
 """Скрипт обучения классификатора транзакций."""
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -14,11 +15,14 @@ from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
+    accuracy_score,
     balanced_accuracy_score,
     classification_report,
     confusion_matrix,
     f1_score,
     precision_recall_fscore_support,
+    precision_score,
+    recall_score,
 )
 from sklearn.model_selection import (
     StratifiedKFold,
@@ -68,6 +72,41 @@ _MODULE_NAME = "ml.train"
 def _feature_names_out(transformer, feature_names_in):
     """Имена выходных фичей для FunctionTransformer."""
     return list(FEATURE_COLUMNS)
+
+
+def _extract_feature_importance(classifier) -> list[dict[str, float]]:
+    """Возвращает топ-10 фич по важности, если модель поддерживает вычисление."""
+    importances: np.ndarray | None = None
+
+    try:
+        if hasattr(classifier, "get_feature_importance"):
+            importances = np.asarray(
+                classifier.get_feature_importance(type="FeatureImportance")
+            )
+        elif hasattr(classifier, "feature_importances_"):
+            importances = np.asarray(classifier.feature_importances_)
+        elif hasattr(classifier, "coef_"):
+            importances = np.asarray(classifier.coef_)
+            if importances.ndim > 1:
+                importances = np.mean(np.abs(importances), axis=0)
+            else:
+                importances = np.abs(importances)
+    except Exception:
+        importances = None
+
+    if importances is None or importances.size != len(FEATURE_COLUMNS):
+        return []
+
+    importance_pairs = sorted(
+        zip(FEATURE_COLUMNS, importances.tolist()),
+        key=lambda item: abs(float(item[1])),
+        reverse=True,
+    )
+    top_pairs = importance_pairs[:10]
+    return [
+        {"feature": feature, "importance": float(value)}
+        for feature, value in top_pairs
+    ]
 
 
 def _resolve_path(
@@ -335,6 +374,8 @@ def train_model(
     """Обучает классификатор транзакций и сохраняет артефакт на диск."""
     data_path = _resolve_path(data_path, config.DATA_PATH, must_exist=True)
     model_path = _resolve_path(model_path, config.MODEL_PATH)
+    output_dir = model_path.parent
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Загрузка данных из %s", data_path)
     df = _load_dataset(data_path)
@@ -368,6 +409,13 @@ def train_model(
         random_state=config.RANDOM_STATE,
         stratify=y,
     )
+    df_train = df.loc[X_train.index].copy()
+    df_test = df.loc[X_test.index].copy()
+    train_split_path = output_dir / "train_split.csv"
+    test_split_path = output_dir / "test_split.csv"
+    df_train.to_csv(train_split_path, index=False)
+    df_test.to_csv(test_split_path, index=False)
+    logger.info("Сплиты сохранены: train=%s, test=%s", train_split_path, test_split_path)
 
     logger.info("Обучение модели в режиме: %s", config.MODEL_TYPE)
     model = _build_model_pipeline(config.MODEL_TYPE)
@@ -400,6 +448,16 @@ def train_model(
     )
     logger.info("=== Per-class metrics ===")
     logger.info("\n%s", class_metrics.to_string(index=False))
+    per_class_metrics = [
+        {
+            "category": str(row["Class"]),
+            "precision": float(row["Precision"]),
+            "recall": float(row["Recall"]),
+            "f1": float(row["F1"]),
+            "support": int(row["Support"]),
+        }
+        for _, row in class_metrics.iterrows()
+    ]
 
     logger.info("=== Balanced Accuracy (равный вес классам) ===")
     balanced_acc = balanced_accuracy_score(y_test, y_pred)
@@ -408,6 +466,22 @@ def train_model(
     logger.info("=== Macro F1 (средний F1 по классам) ===")
     macro_f1 = f1_score(y_test, y_pred, average="macro", zero_division=0)
     logger.info("Macro F1: %.3f", macro_f1)
+
+    accuracy = accuracy_score(y_test, y_pred)
+    weighted_f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
+    precision_weighted = precision_score(
+        y_test, y_pred, average="weighted", zero_division=0
+    )
+    recall_weighted = recall_score(
+        y_test, y_pred, average="weighted", zero_division=0
+    )
+    logger.info(
+        "Accuracy=%.3f, Weighted F1=%.3f, Precision(weighted)=%.3f, Recall(weighted)=%.3f",
+        accuracy,
+        weighted_f1,
+        precision_weighted,
+        recall_weighted,
+    )
 
     if config.MODEL_TYPE in {"ensemble", "catboost"}:
         baseline_map = {
@@ -438,6 +512,10 @@ def train_model(
     cm = confusion_matrix(y_test, y_pred, labels=labels_sorted)
     logger.info("Labels order: %s", labels_sorted)
     logger.info("Confusion matrix:\n%s", cm)
+    confusion_info = {
+        "labels": [str(label) for label in labels_sorted],
+        "matrix": cm.astype(int).tolist(),
+    }
 
     logger.info("=== Calibrated model + custom thresholds (offline analysis) ===")
     try:
@@ -488,7 +566,6 @@ def train_model(
     logger.info("=== Class distribution (train) ===\n%s", y_train.value_counts())
     logger.info("=== Class distribution (test) ===\n%s", y_test.value_counts())
 
-    model_path.parent.mkdir(parents=True, exist_ok=True)
     scaler = model.named_steps["preprocess"].named_transformers_["numeric"].named_steps["scaler"]
     payload = {
         "model": model,
@@ -499,6 +576,34 @@ def train_model(
     }
     joblib.dump(payload, model_path)
     logger.info("Модель сохранена в %s", model_path)
+
+    feature_importance = _extract_feature_importance(model.named_steps["clf"])
+    metrics_summary = {
+        "accuracy": float(accuracy),
+        "macro_f1": float(macro_f1),
+        "weighted_f1": float(weighted_f1),
+        "balanced_accuracy": float(balanced_acc),
+        "precision_weighted": float(precision_weighted),
+        "recall_weighted": float(recall_weighted),
+        "cv_macro_f1_mean": float(cv_scores.mean()),
+        "cv_macro_f1_std": float(cv_scores.std()),
+        "classification_report": report,
+    }
+    model_report = {
+        "model": {
+            "type": config.MODEL_TYPE,
+            "version": model_path.name,
+            "random_state": config.RANDOM_STATE,
+        },
+        "metrics": metrics_summary,
+        "per_class": per_class_metrics,
+        "confusion_matrix": confusion_info,
+        "feature_importance": feature_importance,
+    }
+    report_path = output_dir / "transaction_classifier_report.json"
+    with report_path.open("w", encoding="utf-8") as report_file:
+        json.dump(model_report, report_file, ensure_ascii=False, indent=2)
+    logger.info("Отчёт о модели сохранён в %s", report_path)
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:

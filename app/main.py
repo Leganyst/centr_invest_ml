@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, UploadFile, status
-from sklearn.metrics import balanced_accuracy_score, f1_score
+from fastapi.responses import FileResponse
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, f1_score
 
 from . import schemas
 from .config import get_settings
@@ -20,6 +23,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("transaction_backend")
 settings = get_settings()
+REPORT_FILENAME = "transaction_classifier_report.json"
+TRAIN_SPLIT_FILENAME = "train_split.csv"
+TEST_SPLIT_FILENAME = "test_split.csv"
 
 app = FastAPI(title="Transaction Classifier API", version="0.1.0")
 
@@ -47,6 +53,68 @@ def healthcheck() -> schemas.HealthResponse:
         model_type=settings.model_type,
         model_path=str(settings.model_path),
     )
+
+
+def _load_model_report_payload() -> dict[str, Any]:
+    report_path = settings.model_path.parent / REPORT_FILENAME
+    if not report_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="MODEL_REPORT_NOT_FOUND: обучите модель через ml.train и повторите запрос.",
+        )
+    try:
+        return json.loads(report_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # pragma: no cover
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"FAILED_TO_READ_REPORT: {exc}",
+        )
+
+
+def _serve_split_file(filename: str) -> FileResponse:
+    file_path = settings.model_path.parent / filename
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"SPLIT_NOT_FOUND: файл {filename} отсутствует. Запустите обучение.",
+        )
+    return FileResponse(
+        file_path,
+        media_type="text/csv",
+        filename=filename,
+    )
+
+
+@app.get(
+    "/api/ml/report",
+    response_model=schemas.ModelReport,
+    summary="Глобальные метрики качества модели",
+    response_description="Общий отчёт с метриками, матрицей ошибок и важностью фичей.",
+)
+def get_model_report() -> schemas.ModelReport:
+    """Возвращает сохранённый json-отчёт об обученной модели."""
+    payload = _load_model_report_payload()
+    return schemas.ModelReport.model_validate(payload)
+
+
+@app.get(
+    "/api/ml/export/train",
+    summary="Скачать train-сплит обучения",
+    response_class=FileResponse,
+)
+def export_train_split() -> FileResponse:
+    """Отдаёт CSV с train-сплитом."""
+    return _serve_split_file(TRAIN_SPLIT_FILENAME)
+
+
+@app.get(
+    "/api/ml/export/test",
+    summary="Скачать test-сплит обучения",
+    response_class=FileResponse,
+)
+def export_test_split() -> FileResponse:
+    """Отдаёт CSV с test-сплитом."""
+    return _serve_split_file(TEST_SPLIT_FILENAME)
 
 
 @app.post(
@@ -142,6 +210,7 @@ async def upload_transactions(file: UploadFile = File(...)) -> schemas.CSVUpload
     has_truth = truth_series is not None and truth_series.notna().any()
     macro_f1 = None
     balanced_acc = None
+    accuracy_value = None
     if has_truth:
         mask = truth_series.notna()
         y_true = truth_series[mask].astype(str)
@@ -149,6 +218,7 @@ async def upload_transactions(file: UploadFile = File(...)) -> schemas.CSVUpload
         if len(y_true) > 0 and len(y_pred_truth) == len(y_true):
             macro_f1 = f1_score(y_true, y_pred_truth, average="macro", zero_division=0)
             balanced_acc = balanced_accuracy_score(y_true, y_pred_truth)
+            accuracy_value = accuracy_score(y_true, y_pred_truth)
 
     rows = []
     actual_categories = truth_series if truth_series is not None else None
@@ -193,6 +263,7 @@ async def upload_transactions(file: UploadFile = File(...)) -> schemas.CSVUpload
         has_ground_truth=bool(has_truth),
         macro_f1=macro_f1,
         balanced_accuracy=balanced_acc,
+        accuracy=accuracy_value,
     )
 
     response_payload = schemas.CSVUploadResponse(

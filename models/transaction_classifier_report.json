@@ -1,0 +1,164 @@
+{
+  "model": {
+    "type": "catboost",
+    "version": "transaction_classifier.joblib",
+    "random_state": 42
+  },
+  "metrics": {
+    "accuracy": 0.9285714285714286,
+    "macro_f1": 0.7094460875597911,
+    "weighted_f1": 0.9322903835649715,
+    "balanced_accuracy": 0.7815966022831792,
+    "precision_weighted": 0.939397175925807,
+    "recall_weighted": 0.9285714285714286,
+    "cv_macro_f1_mean": 0.6265182157520398,
+    "cv_macro_f1_std": 0.05160319518910167,
+    "classification_report": "              precision    recall  f1-score   support\n\n        Food       0.99      0.95      0.97       183\n        Misc       0.89      0.91      0.90       101\n        Rent       1.00      1.00      1.00         1\n      Salary       0.67      1.00      0.80         2\n    Shopping       0.45      0.83      0.59         6\n   Transport       0.00      0.00      0.00         1\n\n    accuracy                           0.93       294\n   macro avg       0.67      0.78      0.71       294\nweighted avg       0.94      0.93      0.93       294\n"
+  },
+  "per_class": [
+    {
+      "category": "Food",
+      "precision": 0.9885714285714285,
+      "recall": 0.9453551912568307,
+      "f1": 0.9664804469273743,
+      "support": 183
+    },
+    {
+      "category": "Misc",
+      "precision": 0.8932038834951457,
+      "recall": 0.9108910891089109,
+      "f1": 0.9019607843137255,
+      "support": 101
+    },
+    {
+      "category": "Rent",
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "support": 1
+    },
+    {
+      "category": "Salary",
+      "precision": 0.6666666666666666,
+      "recall": 1.0,
+      "f1": 0.8,
+      "support": 2
+    },
+    {
+      "category": "Shopping",
+      "precision": 0.45454545454545453,
+      "recall": 0.8333333333333334,
+      "f1": 0.5882352941176471,
+      "support": 6
+    },
+    {
+      "category": "Transport",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 1
+    }
+  ],
+  "confusion_matrix": {
+    "labels": [
+      "Food",
+      "Misc",
+      "Rent",
+      "Salary",
+      "Shopping",
+      "Transport"
+    ],
+    "matrix": [
+      [
+        173,
+        9,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        2,
+        92,
+        0,
+        1,
+        5,
+        1
+      ],
+      [
+        0,
+        0,
+        1,
+        0,
+        0,
+        0
+      ],
+      [
+        0,
+        0,
+        0,
+        2,
+        0,
+        0
+      ],
+      [
+        0,
+        1,
+        0,
+        0,
+        5,
+        0
+      ],
+      [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0
+      ]
+    ]
+  },
+  "feature_importance": [
+    {
+      "feature": "transaction_amount",
+      "importance": 18.341383632456647
+    },
+    {
+      "feature": "month",
+      "importance": 15.233845117918893
+    },
+    {
+      "feature": "Withdrawal",
+      "importance": 15.014018840581784
+    },
+    {
+      "feature": "day",
+      "importance": 9.272190903115021
+    },
+    {
+      "feature": "Balance",
+      "importance": 7.724814298020399
+    },
+    {
+      "feature": "weekday",
+      "importance": 7.6764758046976365
+    },
+    {
+      "feature": "month_shopping_season",
+      "importance": 6.323727453897666
+    },
+    {
+      "feature": "amount_high",
+      "importance": 6.0066495230897505
+    },
+    {
+      "feature": "is_deposit",
+      "importance": 4.402258568494839
+    },
+    {
+      "feature": "is_withdrawal",
+      "importance": 2.7476302580134466
+    }
+  ]
+}
