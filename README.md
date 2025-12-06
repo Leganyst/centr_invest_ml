@@ -4,7 +4,7 @@
 
 ## Структура проекта
 
-- `ml/` — модуль с пайплайном обучения (`train.py`), обёрткой для инференса (`model.py`) и конфигурацией (`config.py`).
+- `ml/` — модуль с пайплайном обучения (`train.py`), обёрткой для инференса (`model.py`), конфигурацией (`config.py`) и генераторами данных (`data_generator.py` для semi-supervised и балансировки).
 - `app/` — FastAPI-бэкенд с одним основным эндпоинтом загрузки CSV и healthcheck’ом.
 - `scripts/` — утилиты (benchmarks, генераторы датасета).
 - `models/` — готовые артефакты (`transaction_classifier.joblib`).
@@ -47,6 +47,7 @@ uvicorn app.main:app --reload
 ```
 
 По умолчанию сервис загружает модель из `ml.config.MODEL_PATH`. Можно переопределить переменными окружения `MODEL_PATH` и `MODEL_TYPE`.
+В `ml/config.py` для `MODEL_TYPE` поддерживаются режимы `"simple"`, `"advanced"`, `"ensemble"`, `"catboost"` и `"neural"` (PyTorch-сеть поверх тех же фичей). Там же можно включить дополнительные шаги подготовки данных: semi-supervised label propagation (`USE_LABEL_PROPAGATION`, `UNLABELED_DATA_PATH`, `LABEL_PROPAGATION_CONFIDENCE`) и oversampling (`USE_OVERSAMPLING`, `OVERSAMPLING_MAX_PER_CLASS`), которые срабатывают только во время обучения.
 
 ### Эндпоинты
 

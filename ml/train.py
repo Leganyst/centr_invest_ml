@@ -9,6 +9,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier
+from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestClassifier, VotingClassifier
@@ -34,14 +35,16 @@ from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
 
 from . import config
+from .nn_model import TorchNNClassifier
+from .data_generator import balance_by_oversampling, run_label_propagation
 
 logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
     sys.modules["ml.train"] = sys.modules[__name__]
 
-REQUIRED_COLUMNS = ("Date", "Withdrawal", "Deposit", "Balance", "Category")
-RAW_FEATURE_COLUMNS = ("Date", "Withdrawal", "Deposit", "Balance")
+REQUIRED_COLUMNS = ("Date", "Withdrawal", "Deposit", "Balance", "Category", "RefNo")
+RAW_FEATURE_COLUMNS = ("Date", "Withdrawal", "Deposit", "Balance", "RefNo")
 FEATURE_COLUMNS = [
     "Withdrawal",
     "Deposit",
@@ -59,6 +62,7 @@ FEATURE_COLUMNS = [
     "balance_after_low",
     "shopping_pattern",
     "month_shopping_season",
+    "RefNoIdx",
 ]
 DATE_FORMATS = (
     "%m/%d/%Y",
@@ -72,6 +76,31 @@ _MODULE_NAME = "ml.train"
 def _feature_names_out(transformer, feature_names_in):
     """Имена выходных фичей для FunctionTransformer."""
     return list(FEATURE_COLUMNS)
+
+
+class RefNoEncoder(TransformerMixin, BaseEstimator):
+    """Кодирует строковый RefNo в числовой индекс."""
+
+    def fit(self, X: pd.DataFrame, y=None):  # type: ignore[override]
+        if "RefNo" not in X.columns:
+            values = pd.Series("", index=X.index, dtype="string")
+        else:
+            values = X["RefNo"].astype("string").fillna("")
+        unique = pd.unique(values)
+        self.mapping_ = {val: idx for idx, val in enumerate(unique)}
+        self.unknown_index_ = len(self.mapping_)
+        return self
+
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:  # type: ignore[override]
+        if not hasattr(self, "mapping_"):
+            raise ValueError("RefNoEncoder должен быть обучен перед transform().")
+        df = X.copy()
+        if "RefNo" not in df.columns:
+            df["RefNo"] = ""
+        series = df["RefNo"].astype("string").fillna("")
+        encoded = series.map(self.mapping_).fillna(self.unknown_index_).astype(int)
+        df["RefNoIdx"] = encoded
+        return df
 
 
 def _extract_feature_importance(classifier) -> list[dict[str, float]]:
@@ -220,6 +249,9 @@ def _load_dataset(path: Path) -> pd.DataFrame:
 
     for column in ("Withdrawal", "Deposit", "Balance"):
         df[column] = pd.to_numeric(df[column], errors="coerce")
+    if "RefNo" not in df.columns:
+        df["RefNo"] = ""
+    df["RefNo"] = df["RefNo"].astype("string").fillna("")
 
     initial_rows = len(df)
     df = df.dropna(how="all")
@@ -235,6 +267,356 @@ def _load_dataset(path: Path) -> pd.DataFrame:
 
     logger.info("Датасет после очистки: %d строк.", len(df))
     return df.reset_index(drop=True)
+
+
+def _load_unlabeled_dataset(path: Path) -> pd.DataFrame:
+    """Загружает CSV без столбца Category, применяя ту же очистку дат и числовых полей."""
+    df = pd.read_csv(path, dtype_backend="numpy_nullable")
+    if df.empty:
+        return df
+    if "Date" not in df.columns:
+        raise ValueError("В файле без разметки отсутствует колонка Date.")
+    date_main, _ = _parse_date_series(df["Date"], "Date")
+    if "Date.1" in df.columns:
+        date_alt, _ = _parse_date_series(df["Date.1"], "Date.1")
+    else:
+        date_alt = pd.Series(pd.NaT, index=df.index)
+    df["Date"] = date_main.fillna(date_alt)
+    df = df.dropna(subset=["Date"])
+    for column in ("Withdrawal", "Deposit", "Balance"):
+        if column in df.columns:
+            df[column] = pd.to_numeric(df[column], errors="coerce")
+        else:
+            df[column] = 0.0
+    if "RefNo" not in df.columns:
+        df["RefNo"] = ""
+    df["RefNo"] = df["RefNo"].astype("string").fillna("")
+    df = df.dropna(subset=list(RAW_FEATURE_COLUMNS))
+    logger.info("Неразмеченный датасет: %d строк после очистки.", len(df))
+    return df.reset_index(drop=True)
+
+
+def _prepare_train_split(
+    X: pd.DataFrame,
+    y: pd.Series,
+    df: pd.DataFrame,
+    output_dir: Path,
+) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
+    """Делит данные на train/test и сохраняет CSV-сплиты."""
+    X_train_raw, X_test, y_train_raw, y_test = train_test_split(
+        X,
+        y,
+        test_size=config.TEST_SIZE,
+        random_state=config.RANDOM_STATE,
+        stratify=y,
+    )
+    df_train = df.loc[X_train_raw.index].copy()
+    df_test = df.loc[X_test.index].copy()
+    train_split_path = output_dir / "train_split.csv"
+    test_split_path = output_dir / "test_split.csv"
+    df_train.to_csv(train_split_path, index=False)
+    df_test.to_csv(test_split_path, index=False)
+    logger.info("Сплиты сохранены: train=%s, test=%s", train_split_path, test_split_path)
+    return (
+        df_train.reset_index(drop=True),
+        y_train_raw.reset_index(drop=True),
+        X_test,
+        y_test,
+    )
+
+
+def _maybe_apply_label_propagation(
+    train_df: pd.DataFrame,
+    train_target: pd.Series,
+) -> tuple[pd.DataFrame, pd.Series]:
+    if not getattr(config, "USE_LABEL_PROPAGATION", False):
+        logger.info("Label propagation отключён в конфигурации.")
+        return train_df, train_target
+
+    unlabeled_path = getattr(config, "UNLABELED_DATA_PATH", None)
+    if not unlabeled_path or not Path(unlabeled_path).exists():
+        logger.info("Файл с неразмеченными данными не найден, label propagation пропущен.")
+        return train_df, train_target
+
+    df_unlabeled = _load_unlabeled_dataset(unlabeled_path)
+    if df_unlabeled.empty:
+        logger.info("Файл с неразмеченными данными пустой, пропускаем label propagation.")
+        return train_df, train_target
+
+    encoder_lp = RefNoEncoder()
+    combined = pd.concat(
+        [train_df, df_unlabeled[list(RAW_FEATURE_COLUMNS)].copy()],
+        ignore_index=True,
+    )
+    encoder_lp.fit(combined)
+    train_encoded = encoder_lp.transform(train_df.copy())
+    unlabeled_encoded = encoder_lp.transform(
+        df_unlabeled[list(RAW_FEATURE_COLUMNS)].copy()
+    )
+    train_features = _feature_builder(train_encoded)
+    unlabeled_features = _feature_builder(unlabeled_encoded)
+    (
+        _,
+        _,
+        pseudo_indices,
+        pseudo_labels,
+    ) = run_label_propagation(
+        train_features.to_numpy(),
+        train_target.to_numpy(),
+        unlabeled_features.to_numpy(),
+        confidence_threshold=getattr(config, "LABEL_PROPAGATION_CONFIDENCE", 0.9),
+    )
+    if pseudo_indices.size == 0:
+        logger.info("Label propagation не нашёл уверенных псевдоразметок.")
+        return train_df, train_target
+
+    pseudo_rows = df_unlabeled.iloc[pseudo_indices].copy()
+    pseudo_rows["Category"] = pseudo_labels
+    train_df = pd.concat(
+        [train_df, pseudo_rows[list(RAW_FEATURE_COLUMNS)]],
+        ignore_index=True,
+    )
+    train_target = pd.concat(
+        [train_target, pseudo_rows["Category"]],
+        ignore_index=True,
+    )
+    logger.info(
+        "Label propagation добавил %d псевдоразмеченных строк.",
+        len(pseudo_rows),
+    )
+    return train_df, train_target
+
+
+def _maybe_apply_oversampling(
+    train_df: pd.DataFrame,
+    train_target: pd.Series,
+) -> tuple[pd.DataFrame, pd.Series]:
+    if not getattr(config, "USE_OVERSAMPLING", False):
+        logger.info("Oversampling отключён в конфигурации.")
+        return train_df, train_target
+
+    encoder_over = RefNoEncoder()
+    train_encoded = encoder_over.fit_transform(train_df.copy())
+    train_features = _feature_builder(train_encoded)
+    _, _, sample_indices = balance_by_oversampling(
+        train_features.to_numpy(),
+        train_target.to_numpy(),
+        max_per_class=getattr(config, "OVERSAMPLING_MAX_PER_CLASS", None),
+        random_state=config.RANDOM_STATE,
+        return_indices=True,
+    )
+    train_df = train_df.iloc[sample_indices].reset_index(drop=True)
+    train_target = train_target.iloc[sample_indices].reset_index(drop=True)
+    logger.info("После oversampling train-набор содержит %d строк.", len(train_df))
+    return train_df, train_target
+
+
+def _fit_model(train_df: pd.DataFrame, train_target: pd.Series) -> Pipeline:
+    logger.info("Обучение модели в режиме: %s", config.MODEL_TYPE)
+    model = _build_model_pipeline(config.MODEL_TYPE)
+    try:
+        model.fit(train_df, train_target)
+    except Exception as exc:  # pragma: no cover
+        logger.exception("Ошибка обучения модели: %s", exc)
+        raise
+    return model
+
+
+def _evaluate_model(
+    model: Pipeline,
+    X_test: pd.DataFrame,
+    y_test: pd.Series,
+    train_df: pd.DataFrame,
+    train_target: pd.Series,
+    cv_scores: np.ndarray,
+) -> dict:
+    y_pred = model.predict(X_test)
+    report = classification_report(y_test, y_pred, zero_division=0)
+    logger.info("=== Classification report ===\n%s", report)
+
+    labels_sorted = sorted(y_test.unique())
+    precision, recall, f1_per_class, support = precision_recall_fscore_support(
+        y_test,
+        y_pred,
+        labels=labels_sorted,
+        zero_division=0,
+    )
+    class_metrics = pd.DataFrame(
+        {
+            "Class": labels_sorted,
+            "Precision": precision,
+            "Recall": recall,
+            "F1": f1_per_class,
+            "Support": support,
+        }
+    )
+    logger.info("=== Per-class metrics ===")
+    logger.info("\n%s", class_metrics.to_string(index=False))
+    per_class_metrics = [
+        {
+            "category": str(row["Class"]),
+            "precision": float(row["Precision"]),
+            "recall": float(row["Recall"]),
+            "f1": float(row["F1"]),
+            "support": int(row["Support"]),
+        }
+        for _, row in class_metrics.iterrows()
+    ]
+
+    balanced_acc = balanced_accuracy_score(y_test, y_pred)
+    macro_f1 = f1_score(y_test, y_pred, average="macro", zero_division=0)
+    accuracy = accuracy_score(y_test, y_pred)
+    weighted_f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
+    precision_weighted = precision_score(
+        y_test, y_pred, average="weighted", zero_division=0
+    )
+    recall_weighted = recall_score(
+        y_test, y_pred, average="weighted", zero_division=0
+    )
+    logger.info("Balanced Accuracy: %.3f", balanced_acc)
+    logger.info("Macro F1: %.3f", macro_f1)
+    logger.info(
+        "Accuracy=%.3f, Weighted F1=%.3f, Precision(weighted)=%.3f, Recall(weighted)=%.3f",
+        accuracy,
+        weighted_f1,
+        precision_weighted,
+        recall_weighted,
+    )
+
+    if config.MODEL_TYPE in {"ensemble", "catboost"}:
+        baseline_map = {
+            "simple": "Simple (LogReg)",
+            "advanced": "Advanced (RF)",
+        }
+        baseline_scores: dict[str, float] = {}
+        for base_type, label in baseline_map.items():
+            baseline_model = _build_model_pipeline(base_type)
+            baseline_model.fit(train_df, train_target)
+            base_pred = baseline_model.predict(X_test)
+            score = f1_score(y_test, base_pred, average="macro", zero_division=0)
+            baseline_scores[label] = score
+            logger.info("%s Macro F1: %.3f", label, score)
+
+        reference_log = (
+            "CatBoost" if config.MODEL_TYPE == "catboost" else "Ensemble (Voting)"
+        )
+        logger.info(
+            "%s Macro F1 vs baselines: %.3f vs LogReg %.3f vs RF %.3f",
+            reference_log,
+            macro_f1,
+            baseline_scores[baseline_map["simple"]],
+            baseline_scores[baseline_map["advanced"]],
+        )
+
+    logger.info("=== Confusion Matrix (порядок классов как в y_test.unique()) ===")
+    cm = confusion_matrix(y_test, y_pred, labels=labels_sorted)
+    logger.info("Labels order: %s", labels_sorted)
+    logger.info("Confusion matrix:\n%s", cm)
+    confusion_info = {
+        "labels": [str(label) for label in labels_sorted],
+        "matrix": cm.astype(int).tolist(),
+    }
+
+    logger.info("=== Calibrated model + custom thresholds (offline analysis) ===")
+    if config.MODEL_TYPE == "neural":
+        logger.info("Калибровку для режима 'neural' пропускаем.")
+    else:
+        try:
+            calibrated = CalibratedClassifierCV(model, method="sigmoid", cv=3)
+            calibrated.fit(train_df, train_target)
+            proba = calibrated.predict_proba(X_test)
+            classes = list(calibrated.classes_)
+            class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
+            custom_thresholds = {
+                "Shopping": 0.7,
+                "Rent": 0.3,
+                "Transport": 0.3,
+                "Salary": 0.4,
+            }
+            y_pred_adjusted: list[str] = []
+            for row_probs in proba:
+                best_idx = int(np.argmax(row_probs))
+                best_class = classes[best_idx]
+                best_score = 0.0
+                for cls, idx in class_to_idx.items():
+                    threshold = custom_thresholds.get(cls, 0.5)
+                    score = row_probs[idx]
+                    if score >= threshold and score > best_score:
+                        best_class = cls
+                        best_score = score
+                y_pred_adjusted.append(best_class)
+
+            adjusted_macro_f1 = f1_score(
+                y_test,
+                y_pred_adjusted,
+                average="macro",
+                zero_division=0,
+            )
+            adjusted_balanced_acc = balanced_accuracy_score(y_test, y_pred_adjusted)
+            logger.info(
+                "Adjusted Macro F1 (custom thresholds): %.3f",
+                adjusted_macro_f1,
+            )
+            logger.info(
+                "Adjusted Balanced Accuracy (custom thresholds): %.3f",
+                adjusted_balanced_acc,
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Не удалось выполнить калибровку/threshold tuning: %s", exc)
+
+    metrics_summary = {
+        "accuracy": float(accuracy),
+        "macro_f1": float(macro_f1),
+        "weighted_f1": float(weighted_f1),
+        "balanced_accuracy": float(balanced_acc),
+        "precision_weighted": float(precision_weighted),
+        "recall_weighted": float(recall_weighted),
+        "cv_macro_f1_mean": float(cv_scores.mean()),
+        "cv_macro_f1_std": float(cv_scores.std()),
+        "classification_report": report,
+    }
+    return {
+        "metrics_summary": metrics_summary,
+        "per_class_metrics": per_class_metrics,
+        "confusion_info": confusion_info,
+        "macro_f1": macro_f1,
+        "balanced_acc": balanced_acc,
+    }
+
+
+def _save_artifacts(
+    model: Pipeline,
+    model_path: Path,
+    output_dir: Path,
+    evaluation: dict,
+) -> None:
+    scaler = model.named_steps["preprocess"].named_transformers_["numeric"].named_steps["scaler"]
+    payload = {
+        "model": model,
+        "feature_cols": list(FEATURE_COLUMNS),
+        "input_cols": list(RAW_FEATURE_COLUMNS),
+        "scaler": scaler,
+        "classifier": model.named_steps["clf"],
+    }
+    joblib.dump(payload, model_path)
+    logger.info("Модель сохранена в %s", model_path)
+
+    feature_importance = _extract_feature_importance(model.named_steps["clf"])
+    model_report = {
+        "model": {
+            "type": config.MODEL_TYPE,
+            "version": model_path.name,
+            "random_state": config.RANDOM_STATE,
+        },
+        "metrics": evaluation["metrics_summary"],
+        "per_class": evaluation["per_class_metrics"],
+        "confusion_matrix": evaluation["confusion_info"],
+        "feature_importance": feature_importance,
+    }
+    report_path = output_dir / "transaction_classifier_report.json"
+    with report_path.open("w", encoding="utf-8") as report_file:
+        json.dump(model_report, report_file, ensure_ascii=False, indent=2)
+    logger.info("Отчёт о модели сохранён в %s", report_path)
 
 
 
@@ -275,6 +657,8 @@ def _feature_builder(frame: pd.DataFrame) -> pd.DataFrame:
     ).astype(int)
 
     df["month_shopping_season"] = df["month"].isin([11, 12, 1]).astype(int)
+
+    df["RefNoIdx"] = df.get("RefNoIdx", 0).astype(float)
 
     return df[FEATURE_COLUMNS].fillna(0.0)
 
@@ -355,10 +739,22 @@ def _build_model_pipeline(model_type: str = "advanced") -> Pipeline:
             verbose=False,
             auto_class_weights="Balanced",
         )
+    elif model_type == "neural":
+        classifier = TorchNNClassifier(
+            hidden_dims=(64, 32),
+            dropout=0.1,
+            batch_size=256,
+            lr=1e-3,
+            max_epochs=30,
+            weight_decay=1e-4,
+            random_state=config.RANDOM_STATE,
+            verbose=False,
+        )
     else:
         raise ValueError(f"Unknown model_type: {model_type!r}")
     return Pipeline(
         steps=[
+            ("refno_encoder", RefNoEncoder()),
             ("features", feature_transformer),
             ("preprocess", preprocessor),
             ("clf", classifier),
@@ -395,215 +791,23 @@ def train_model(
         scoring="f1_macro",
         n_jobs=-1,
     )
-
     logger.info(
         "5-fold CV Macro F1: %.3f ± %.3f",
         cv_scores.mean(),
         cv_scores.std(),
     )
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=config.TEST_SIZE,
-        random_state=config.RANDOM_STATE,
-        stratify=y,
-    )
-    df_train = df.loc[X_train.index].copy()
-    df_test = df.loc[X_test.index].copy()
-    train_split_path = output_dir / "train_split.csv"
-    test_split_path = output_dir / "test_split.csv"
-    df_train.to_csv(train_split_path, index=False)
-    df_test.to_csv(test_split_path, index=False)
-    logger.info("Сплиты сохранены: train=%s, test=%s", train_split_path, test_split_path)
+    train_df, train_target, X_test, y_test = _prepare_train_split(X, y, df, output_dir)
+    train_df, train_target = _maybe_apply_label_propagation(train_df, train_target)
+    train_df, train_target = _maybe_apply_oversampling(train_df, train_target)
 
-    logger.info("Обучение модели в режиме: %s", config.MODEL_TYPE)
-    model = _build_model_pipeline(config.MODEL_TYPE)
-    try:
-        model.fit(X_train, y_train)
-    except Exception as exc:  # pragma: no cover - обучение должно проходить успешно
-        logger.exception("Ошибка обучения модели: %s", exc)
-        raise
+    model = _fit_model(train_df, train_target)
+    evaluation = _evaluate_model(model, X_test, y_test, train_df, train_target, cv_scores)
 
-
-    y_pred = model.predict(X_test)
-    report = classification_report(y_test, y_pred, zero_division=0)
-    logger.info("=== Classification report ===\n%s", report)
-
-    labels_sorted = sorted(y_test.unique())
-    precision, recall, f1_per_class, support = precision_recall_fscore_support(
-        y_test,
-        y_pred,
-        labels=labels_sorted,
-        zero_division=0,
-    )
-    class_metrics = pd.DataFrame(
-        {
-            "Class": labels_sorted,
-            "Precision": precision,
-            "Recall": recall,
-            "F1": f1_per_class,
-            "Support": support,
-        }
-    )
-    logger.info("=== Per-class metrics ===")
-    logger.info("\n%s", class_metrics.to_string(index=False))
-    per_class_metrics = [
-        {
-            "category": str(row["Class"]),
-            "precision": float(row["Precision"]),
-            "recall": float(row["Recall"]),
-            "f1": float(row["F1"]),
-            "support": int(row["Support"]),
-        }
-        for _, row in class_metrics.iterrows()
-    ]
-
-    logger.info("=== Balanced Accuracy (равный вес классам) ===")
-    balanced_acc = balanced_accuracy_score(y_test, y_pred)
-    logger.info("Balanced Accuracy: %.3f", balanced_acc)
-
-    logger.info("=== Macro F1 (средний F1 по классам) ===")
-    macro_f1 = f1_score(y_test, y_pred, average="macro", zero_division=0)
-    logger.info("Macro F1: %.3f", macro_f1)
-
-    accuracy = accuracy_score(y_test, y_pred)
-    weighted_f1 = f1_score(y_test, y_pred, average="weighted", zero_division=0)
-    precision_weighted = precision_score(
-        y_test, y_pred, average="weighted", zero_division=0
-    )
-    recall_weighted = recall_score(
-        y_test, y_pred, average="weighted", zero_division=0
-    )
-    logger.info(
-        "Accuracy=%.3f, Weighted F1=%.3f, Precision(weighted)=%.3f, Recall(weighted)=%.3f",
-        accuracy,
-        weighted_f1,
-        precision_weighted,
-        recall_weighted,
-    )
-
-    if config.MODEL_TYPE in {"ensemble", "catboost"}:
-        baseline_map = {
-            "simple": "Simple (LogReg)",
-            "advanced": "Advanced (RF)",
-        }
-        baseline_scores: dict[str, float] = {}
-        for base_type, label in baseline_map.items():
-            baseline_model = _build_model_pipeline(base_type)
-            baseline_model.fit(X_train, y_train)
-            base_pred = baseline_model.predict(X_test)
-            score = f1_score(y_test, base_pred, average="macro", zero_division=0)
-            baseline_scores[label] = score
-            logger.info("%s Macro F1: %.3f", label, score)
-
-        reference_log = (
-            "CatBoost" if config.MODEL_TYPE == "catboost" else "Ensemble (Voting)"
-        )
-        logger.info(
-            "%s Macro F1 vs baselines: %.3f vs LogReg %.3f vs RF %.3f",
-            reference_log,
-            macro_f1,
-            baseline_scores[baseline_map["simple"]],
-            baseline_scores[baseline_map["advanced"]],
-        )
-
-    logger.info("=== Confusion Matrix (порядок классов как в y_test.unique()) ===")
-    cm = confusion_matrix(y_test, y_pred, labels=labels_sorted)
-    logger.info("Labels order: %s", labels_sorted)
-    logger.info("Confusion matrix:\n%s", cm)
-    confusion_info = {
-        "labels": [str(label) for label in labels_sorted],
-        "matrix": cm.astype(int).tolist(),
-    }
-
-    logger.info("=== Calibrated model + custom thresholds (offline analysis) ===")
-    try:
-        calibrated = CalibratedClassifierCV(model, method="sigmoid", cv=3)
-        calibrated.fit(X_train, y_train)
-
-        proba = calibrated.predict_proba(X_test)
-        classes = list(calibrated.classes_)
-        class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
-        custom_thresholds = {
-            "Shopping": 0.7,
-            "Rent": 0.3,
-            "Transport": 0.3,
-            "Salary": 0.4,
-        }
-
-        y_pred_adjusted: list[str] = []
-        for row_probs in proba:
-            best_idx = int(np.argmax(row_probs))
-            best_class = classes[best_idx]
-            best_score = 0.0
-            for cls, idx in class_to_idx.items():
-                threshold = custom_thresholds.get(cls, 0.5)
-                score = row_probs[idx]
-                if score >= threshold and score > best_score:
-                    best_class = cls
-                    best_score = score
-            y_pred_adjusted.append(best_class)
-
-        adjusted_macro_f1 = f1_score(
-            y_test,
-            y_pred_adjusted,
-            average="macro",
-            zero_division=0,
-        )
-        adjusted_balanced_acc = balanced_accuracy_score(y_test, y_pred_adjusted)
-        logger.info(
-            "Adjusted Macro F1 (custom thresholds): %.3f",
-            adjusted_macro_f1,
-        )
-        logger.info(
-            "Adjusted Balanced Accuracy (custom thresholds): %.3f",
-            adjusted_balanced_acc,
-        )
-    except Exception as exc:  # pragma: no cover - вспомогательный анализ
-        logger.warning("Не удалось выполнить калибровку/threshold tuning: %s", exc)
-
-    logger.info("=== Class distribution (train) ===\n%s", y_train.value_counts())
+    logger.info("=== Class distribution (train) ===\n%s", train_target.value_counts())
     logger.info("=== Class distribution (test) ===\n%s", y_test.value_counts())
 
-    scaler = model.named_steps["preprocess"].named_transformers_["numeric"].named_steps["scaler"]
-    payload = {
-        "model": model,
-        "feature_cols": list(FEATURE_COLUMNS),
-        "input_cols": list(RAW_FEATURE_COLUMNS),
-        "scaler": scaler,
-        "classifier": model.named_steps["clf"],
-    }
-    joblib.dump(payload, model_path)
-    logger.info("Модель сохранена в %s", model_path)
-
-    feature_importance = _extract_feature_importance(model.named_steps["clf"])
-    metrics_summary = {
-        "accuracy": float(accuracy),
-        "macro_f1": float(macro_f1),
-        "weighted_f1": float(weighted_f1),
-        "balanced_accuracy": float(balanced_acc),
-        "precision_weighted": float(precision_weighted),
-        "recall_weighted": float(recall_weighted),
-        "cv_macro_f1_mean": float(cv_scores.mean()),
-        "cv_macro_f1_std": float(cv_scores.std()),
-        "classification_report": report,
-    }
-    model_report = {
-        "model": {
-            "type": config.MODEL_TYPE,
-            "version": model_path.name,
-            "random_state": config.RANDOM_STATE,
-        },
-        "metrics": metrics_summary,
-        "per_class": per_class_metrics,
-        "confusion_matrix": confusion_info,
-        "feature_importance": feature_importance,
-    }
-    report_path = output_dir / "transaction_classifier_report.json"
-    with report_path.open("w", encoding="utf-8") as report_file:
-        json.dump(model_report, report_file, ensure_ascii=False, indent=2)
-    logger.info("Отчёт о модели сохранён в %s", report_path)
+    _save_artifacts(model, model_path, output_dir, evaluation)
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:

@@ -20,6 +20,7 @@ class TransactionPayload(TypedDict, total=False):
     withdrawal: float
     deposit: float
     balance: float
+    refno: str
 
 
 class TransactionClassifier:
@@ -31,7 +32,7 @@ class TransactionClassifier:
         payload = self._load_payload(resolved_path)
         self.model = payload["model"]
         self.feature_cols = list(payload.get("feature_cols", []))
-        self.input_cols = payload.get("input_cols") or ["Date", "Withdrawal", "Deposit", "Balance"]
+        self.input_cols = payload.get("input_cols") or ["Date", "Withdrawal", "Deposit", "Balance", "RefNo"]
         logger.info("Transaction classifier loaded from %s", self.model_path)
 
     @staticmethod
@@ -50,11 +51,19 @@ class TransactionClassifier:
 
     def _prepare_frame(self, tx: Mapping[str, Any]) -> DataFrame:
         timestamp = self._parse_date(tx.get("date"))
+
+        def _safe_float(value: Any) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
         row = {
             "Date": timestamp,
-            "Withdrawal": float(tx.get("withdrawal", 0.0)),
-            "Deposit": float(tx.get("deposit", 0.0)),
-            "Balance": float(tx.get("balance", 0.0)),
+            "Withdrawal": _safe_float(tx.get("withdrawal")),
+            "Deposit": _safe_float(tx.get("deposit")),
+            "Balance": _safe_float(tx.get("balance")),
+            "RefNo": str(tx.get("refno", "") or ""),
         }
         frame = pd.DataFrame([row])
         return frame[self.input_cols]
