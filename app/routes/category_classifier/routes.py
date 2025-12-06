@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 
 from app.deps.ml import get_transaction_ml_service
 from app.services.ml.service import TransactionMLService
-from app.schemas.base import APIModel  # или свой базовый
+from app.schemas.base import APIModel
 from app.services.ml.schemas import CategoryEnum
 
 router = APIRouter(prefix="/category", tags=["category"])
