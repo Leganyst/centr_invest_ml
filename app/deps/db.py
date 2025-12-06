@@ -1,4 +1,4 @@
-from typing import AsyncIterable, Iterable
+from typing import AsyncIterable
 
 from dishka import Provider, Scope, provide
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -13,10 +13,14 @@ class DbConnectionProvider(Provider):
         return new_engine(settings)
 
     @provide(scope=Scope.APP)
-    def get_session_maker(self, engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
+    def get_session_maker(
+        self, engine: AsyncEngine
+    ) -> async_sessionmaker[AsyncSession]:
         return new_session_maker(engine)
 
     @provide(scope=Scope.REQUEST)
-    async def get_session(self, session_maker: async_sessionmaker[AsyncSession]) -> AsyncIterable[AsyncSession]:
+    async def get_session(
+        self, session_maker: async_sessionmaker[AsyncSession]
+    ) -> AsyncIterable[AsyncSession]:
         async with session_maker() as session:
             yield session

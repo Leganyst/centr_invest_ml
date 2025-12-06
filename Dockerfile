@@ -2,21 +2,20 @@ FROM python:3.13-alpine AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:0.9.15 /uv /uvx /bin/
 
-WORKDIR /opt
-COPY pyproject.toml uv.lock ./
-RUN uv sync --locked --no-install-project
+RUN adduser -D app
+WORKDIR /app
 
-ENV PATH="/opt/.venv/bin:$PATH"
+COPY pyproject.toml uv.lock ./
+COPY --chown=app third-party third-party/
+RUN uv sync --locked --no-install-project --no-dev
+ENV PATH="/app/.venv/bin:$PATH"
 
 FROM builder AS production
 
-WORKDIR /app
-
-RUN adduser -D app
 USER app
-
 COPY --chown=app app app/
-COPY --chown=app resources resources/
-COPY --chown=app third-party third-party/
+COPY --chown=app docker/entrypoint.sh /opt/entrypoint.sh
+COPY --chown=app alembic.ini .
 
-ENTRYPOINT ["python", "-m", "app"]
+ENTRYPOINT ["/bin/sh", "/opt/entrypoint.sh"]
+CMD ["python", "-m", "app"]

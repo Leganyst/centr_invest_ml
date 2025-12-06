@@ -17,16 +17,31 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.44",
     "uvicorn>=0.38.0",
     "category-classifier>=0.1.0",
-
+    "python-multipart>=0.0.20",
 ]
 
 [tool.uv.workspace]
-members = ["third-party/category-classifier"]
+members = [
+    "third-party/*"
+]
 
 [tool.uv.sources]
 category-classifier = { workspace = true }
 
 [dependency-groups]
 dev = [
+    "mypy>=1.19.0",
     "ruff>=0.14.8",
+]
+
+[tool.mypy]
+exclude = [
+    "third-party/*",
+    "app/alembic",
+]
+
+[tool.ruff]
+exclude = [
+    "third-party/*",
+    "app/alembic",
 ]

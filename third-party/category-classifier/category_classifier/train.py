@@ -1,4 +1,5 @@
 """Скрипт обучения классификатора транзакций."""
+
 import argparse
 import json
 import logging
@@ -104,8 +105,7 @@ def _extract_feature_importance(classifier) -> list[dict[str, float]]:
     )
     top_pairs = importance_pairs[:10]
     return [
-        {"feature": feature, "importance": float(value)}
-        for feature, value in top_pairs
+        {"feature": feature, "importance": float(value)} for feature, value in top_pairs
     ]
 
 
@@ -137,7 +137,9 @@ def _clean_date_series(series: pd.Series) -> pd.Series:
     )
 
 
-def _parse_date_series(series: pd.Series, column_name: str) -> tuple[pd.Series, pd.Series]:
+def _parse_date_series(
+    series: pd.Series, column_name: str
+) -> tuple[pd.Series, pd.Series]:
     """Пытается распарсить колонку дат, используя несколько форматов."""
     cleaned = _clean_date_series(series)
     parsed = pd.Series(pd.NaT, index=series.index)
@@ -186,7 +188,9 @@ def _load_dataset(path: Path) -> pd.DataFrame:
 
     missing_columns = [col for col in REQUIRED_COLUMNS if col not in df.columns]
     if missing_columns:
-        raise ValueError(f"В датасете отсутствуют обязательные столбцы: {missing_columns}")
+        raise ValueError(
+            f"В датасете отсутствуют обязательные столбцы: {missing_columns}"
+        )
     logger.info("Загружено %d строк.", len(df))
 
     # Парсим обе колонки дат: основную и дублированную
@@ -237,7 +241,6 @@ def _load_dataset(path: Path) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-
 def _feature_builder(frame: pd.DataFrame) -> pd.DataFrame:
     """Строит фичи из исходного DataFrame с бизнес-логикой."""
     df = frame.copy()
@@ -260,8 +263,7 @@ def _feature_builder(frame: pd.DataFrame) -> pd.DataFrame:
 
     df["amount_low"] = (df["transaction_amount"] < 100).astype(int)
     df["amount_medium"] = (
-        (df["transaction_amount"] >= 100)
-        & (df["transaction_amount"] < 1000)
+        (df["transaction_amount"] >= 100) & (df["transaction_amount"] < 1000)
     ).astype(int)
     df["amount_high"] = (df["transaction_amount"] >= 1000).astype(int)
 
@@ -282,6 +284,7 @@ def _feature_builder(frame: pd.DataFrame) -> pd.DataFrame:
 # Обеспечиваем корректное имя модуля для сериализации пайплайна.
 _feature_builder.__module__ = _MODULE_NAME
 _feature_names_out.__module__ = _MODULE_NAME
+
 
 def _build_model_pipeline(model_type: str = "advanced") -> Pipeline:
     feature_transformer = FunctionTransformer(
@@ -366,7 +369,6 @@ def _build_model_pipeline(model_type: str = "advanced") -> Pipeline:
     )
 
 
-
 def train_model(
     data_path: Path | str | None = None,
     model_path: Path | str | None = None,
@@ -415,7 +417,9 @@ def train_model(
     test_split_path = output_dir / "test_split.csv"
     df_train.to_csv(train_split_path, index=False)
     df_test.to_csv(test_split_path, index=False)
-    logger.info("Сплиты сохранены: train=%s, test=%s", train_split_path, test_split_path)
+    logger.info(
+        "Сплиты сохранены: train=%s, test=%s", train_split_path, test_split_path
+    )
 
     logger.info("Обучение модели в режиме: %s", config.MODEL_TYPE)
     model = _build_model_pipeline(config.MODEL_TYPE)
@@ -424,7 +428,6 @@ def train_model(
     except Exception as exc:  # pragma: no cover - обучение должно проходить успешно
         logger.exception("Ошибка обучения модели: %s", exc)
         raise
-
 
     y_pred = model.predict(X_test)
     report = classification_report(y_test, y_pred, zero_division=0)
@@ -472,9 +475,7 @@ def train_model(
     precision_weighted = precision_score(
         y_test, y_pred, average="weighted", zero_division=0
     )
-    recall_weighted = recall_score(
-        y_test, y_pred, average="weighted", zero_division=0
-    )
+    recall_weighted = recall_score(y_test, y_pred, average="weighted", zero_division=0)
     logger.info(
         "Accuracy=%.3f, Weighted F1=%.3f, Precision(weighted)=%.3f, Recall(weighted)=%.3f",
         accuracy,
@@ -566,7 +567,11 @@ def train_model(
     logger.info("=== Class distribution (train) ===\n%s", y_train.value_counts())
     logger.info("=== Class distribution (test) ===\n%s", y_test.value_counts())
 
-    scaler = model.named_steps["preprocess"].named_transformers_["numeric"].named_steps["scaler"]
+    scaler = (
+        model.named_steps["preprocess"]
+        .named_transformers_["numeric"]
+        .named_steps["scaler"]
+    )
     payload = {
         "model": model,
         "feature_cols": list(FEATURE_COLUMNS),
@@ -608,8 +613,12 @@ def train_model(
 
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Обучение классификатора транзакций.")
-    parser.add_argument("--data", type=str, help="Путь к CSV с транзакциями.", default=None)
-    parser.add_argument("--model", type=str, help="Путь для сохранения модели.", default=None)
+    parser.add_argument(
+        "--data", type=str, help="Путь к CSV с транзакциями.", default=None
+    )
+    parser.add_argument(
+        "--model", type=str, help="Путь для сохранения модели.", default=None
+    )
     return parser
 
 

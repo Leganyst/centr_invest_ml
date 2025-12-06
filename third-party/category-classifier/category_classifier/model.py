@@ -21,7 +21,12 @@ class TransactionClassifier:
         payload = self._load_payload(resolved_path)
         self.model = payload["model"]
         self.feature_cols = list(payload.get("feature_cols", []))
-        self.input_cols = payload.get("input_cols") or ["Date", "Withdrawal", "Deposit", "Balance"]
+        self.input_cols = payload.get("input_cols") or [
+            "Date",
+            "Withdrawal",
+            "Deposit",
+            "Balance",
+        ]
         logger.info("Transaction classifier loaded from %s", self.model_path)
 
     @staticmethod
@@ -34,8 +39,7 @@ class TransactionClassifier:
             return joblib.load(path)
         except FileNotFoundError as exc:  # pragma: no cover - explicit message
             raise FileNotFoundError(
-                f"Model artifact not found at {path}. "
-                "Run ml.train.train_model() first."
+                f"Model artifact not found at {path}. Run ml.train.train_model() first."
             ) from exc
 
     def _prepare_frame(self, tx: Transaction) -> DataFrame:
@@ -65,17 +69,16 @@ class TransactionClassifier:
     def predict_proba(self, tx: Transaction) -> dict[Category, float]:
         """Возвращает распределение вероятностей по категориям."""
         if not hasattr(self.model, "predict_proba"):
-            raise NotImplementedError("Underlying model does not provide predict_proba.")
+            raise NotImplementedError(
+                "Underlying model does not provide predict_proba."
+            )
 
         features = self._prepare_frame(tx)
         proba = self.model.predict_proba(features)[0]
         classes = getattr(self.model, "classes_", None)
         if classes is None:
             raise RuntimeError("Model does not expose classes_ attribute.")
-        return {
-            Category(label): float(score)
-            for label, score in zip(classes, proba)
-        }
+        return {Category(label): float(score) for label, score in zip(classes, proba)}
 
 
 if __name__ == "__main__":

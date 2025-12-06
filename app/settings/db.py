@@ -2,8 +2,9 @@ from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import PostgresDsn
 
+
 class DatabaseSettings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix='DB_')
+    model_config = SettingsConfigDict(env_prefix="DB_")
 
     host: str
     port: int = 5432

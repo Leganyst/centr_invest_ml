@@ -23,7 +23,6 @@ container = create_container()
 db_settings = asyncio.run(container.get(DatabaseSettings))
 
 
-
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode.
 

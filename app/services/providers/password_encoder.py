@@ -1,5 +1,6 @@
-from app.services.protocols.password_encoder import IPasswordEncoder
+from app.services.providers.protocols.password_encoder import IPasswordEncoder
 import bcrypt
+
 
 class BcryptPasswordEncoder(IPasswordEncoder):
     def hash_password(self, password: str) -> str:

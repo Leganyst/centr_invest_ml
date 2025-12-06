@@ -6,16 +6,7 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_DATABASE: fin-matcher
       DB_HOST: db
-
-  backend-migrate:
-    build: .
-    environment:
-      DB_USERNAME: ${DB_USERNAME}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_DATABASE: fin-matcher
-      DB_HOST: db
-    entrypoint: alembic
-
+      APP_JWT_SECRET: ${APP_JWT_SECRET}
 
   nginx:
     image: nginx:1.25-alpine
@@ -30,6 +21,7 @@ services:
     environment:
       POSTGRES_USER: ${DB_USERNAME}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
+    restart: unless-stopped
     ports:
       - "127.0.0.1:5432:5432"
     volumes:

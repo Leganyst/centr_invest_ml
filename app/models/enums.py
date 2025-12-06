@@ -2,8 +2,8 @@ from enum import StrEnum
 
 
 class UserRole(StrEnum):
-    USER = 'user'
-    ADMIN = 'admin'
+    USER = "user"
+    ADMIN = "admin"
 
 
 class TransactionCategory(StrEnum):
