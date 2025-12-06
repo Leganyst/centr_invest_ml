@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Iterable, List, Tuple
+from typing import List, Tuple
 
 import pandas as pd
 from fastapi import HTTPException, status

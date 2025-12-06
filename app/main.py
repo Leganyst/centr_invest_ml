@@ -43,8 +43,28 @@ def healthcheck() -> schemas.HealthResponse:
     )
 
 
-@app.post("/api/v1/transactions/upload", response_model=schemas.CSVUploadResponse)
+@app.post(
+    "/api/v1/transactions/upload",
+    response_model=schemas.CSVUploadResponse,
+    summary="Классификация транзакций из CSV",
+    response_description=(
+        "JSON с метаданными (`meta`), агрегатами (`summary`), "
+        "списком строк (`rows`) и метриками качества (`metrics`). "
+        "`summary.by_category` используется для круговых/столбчатых диаграмм, "
+        "`summary.timeseries` — для графика по месяцам, а `rows` — для таблицы/ручной корректировки."
+    ),
+)
 async def upload_transactions(file: UploadFile = File(...)) -> schemas.CSVUploadResponse:
+    """
+    Загрузка CSV и получение данных для фронта.
+
+    Возвращает JSON следующего вида:
+    - `meta`: количество строк в файле, сколько удалось обработать, тип/версия модели.
+    - `summary.by_category`: список объектов `{category, count, amount}` — удобно для круговых/бар-чартов.
+    - `summary.timeseries`: массив периодов `YYYY-MM` с суммой операций и разбиением по категориям.
+    - `rows`: массив строк для табличного отображения; содержит исходные значения и `predicted_category`.
+    - `metrics`: если в CSV была колонка `Category`, здесь будут `macro_f1` и `balanced_accuracy`.
+    """
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
