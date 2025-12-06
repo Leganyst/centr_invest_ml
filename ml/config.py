@@ -7,3 +7,4 @@ MODEL_PATH = BASE_DIR / "models" / "transaction_classifier.joblib"
 
 RANDOM_STATE = 42
 TEST_SIZE = 0.2
+MODEL_TYPE = "catboost"  # варианты: "simple", "advanced", "ensemble", "catboost"

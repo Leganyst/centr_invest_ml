@@ -1,15 +1,30 @@
 """Скрипт обучения классификатора транзакций."""
 import argparse
 import logging
+import sys
 from pathlib import Path
 
 import joblib
+import numpy as np
 import pandas as pd
+from catboost import CatBoostClassifier
+from sklearn.calibration import CalibratedClassifierCV
 from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import RandomForestClassifier, VotingClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import classification_report
-from sklearn.model_selection import train_test_split
+from sklearn.metrics import (
+    balanced_accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    precision_recall_fscore_support,
+)
+from sklearn.model_selection import (
+    StratifiedKFold,
+    cross_val_score,
+    train_test_split,
+)
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
@@ -18,15 +33,41 @@ from . import config
 
 logger = logging.getLogger(__name__)
 
+if __name__ == "__main__":
+    sys.modules["ml.train"] = sys.modules[__name__]
+
 REQUIRED_COLUMNS = ("Date", "Withdrawal", "Deposit", "Balance", "Category")
 RAW_FEATURE_COLUMNS = ("Date", "Withdrawal", "Deposit", "Balance")
-FEATURE_COLUMNS = ("Withdrawal", "Deposit", "Balance", "day", "month", "weekday")
+FEATURE_COLUMNS = [
+    "Withdrawal",
+    "Deposit",
+    "Balance",
+    "day",
+    "month",
+    "weekday",
+    "is_weekend",
+    "transaction_amount",
+    "is_withdrawal",
+    "is_deposit",
+    "amount_low",
+    "amount_medium",
+    "amount_high",
+    "balance_after_low",
+    "shopping_pattern",
+    "month_shopping_season",
+]
 DATE_FORMATS = (
     "%m/%d/%Y",
     "%m/%d/%y",
     "%d/%m/%Y",
     "%d/%m/%y",
 )
+_MODULE_NAME = "ml.train"
+
+
+def _feature_names_out(transformer, feature_names_in):
+    """Имена выходных фичей для FunctionTransformer."""
+    return list(FEATURE_COLUMNS)
 
 
 def _resolve_path(
@@ -159,42 +200,55 @@ def _load_dataset(path: Path) -> pd.DataFrame:
 
 
 def _feature_builder(frame: pd.DataFrame) -> pd.DataFrame:
-    """Строит фичи из исходного DataFrame."""
-    if not pd.api.types.is_datetime64_any_dtype(frame["Date"]):
+    """Строит фичи из исходного DataFrame с бизнес-логикой."""
+    df = frame.copy()
+
+    if not pd.api.types.is_datetime64_any_dtype(df["Date"]):
         raise ValueError("Колонка 'Date' должна быть datetime64")
 
-    date_features = pd.DataFrame(
-        {
-            "day": frame["Date"].dt.day,      # type: ignore
-            "month": frame["Date"].dt.month,  # type: ignore
-            "weekday": frame["Date"].dt.weekday,  # type: ignore
-        },
-        index=frame.index,
-    )
+    df["day"] = df["Date"].dt.day
+    df["month"] = df["Date"].dt.month
+    df["weekday"] = df["Date"].dt.weekday
+    df["is_weekend"] = (df["weekday"] >= 5).astype(int)
 
-    numeric_features = frame[["Withdrawal", "Deposit", "Balance"]]
-    features = pd.concat([numeric_features, date_features], axis=1)
+    withdrawal = df["Withdrawal"].fillna(0.0).astype(float)
+    deposit = df["Deposit"].fillna(0.0).astype(float)
+    balance = df["Balance"].fillna(0.0).astype(float)
 
-    # ВАЖНО: привести FEATURE_COLUMNS к list
-    return features[list(FEATURE_COLUMNS)]
+    df["transaction_amount"] = (withdrawal - deposit).abs()
+    df["is_withdrawal"] = (withdrawal > 0).astype(int)
+    df["is_deposit"] = (deposit > 0).astype(int)
+
+    df["amount_low"] = (df["transaction_amount"] < 100).astype(int)
+    df["amount_medium"] = (
+        (df["transaction_amount"] >= 100)
+        & (df["transaction_amount"] < 1000)
+    ).astype(int)
+    df["amount_high"] = (df["transaction_amount"] >= 1000).astype(int)
+
+    df["balance_after_low"] = (balance < 100).astype(int)
+
+    df["shopping_pattern"] = (
+        (df["transaction_amount"] < 500)
+        & (df["is_withdrawal"] == 1)
+        & (df["weekday"] < 5)
+        & ~(df["transaction_amount"] > 1000)
+    ).astype(int)
+
+    df["month_shopping_season"] = df["month"].isin([11, 12, 1]).astype(int)
+
+    return df[FEATURE_COLUMNS].fillna(0.0)
 
 
-def _feature_names_out(transformer: FunctionTransformer, input_features: list[str] | None) -> list[str]:
-    """Преобразует входные имена фичей в выходные."""
-    if input_features is None:
-        names = list(RAW_FEATURE_COLUMNS)
-    else:
-        names = list(input_features)
+# Обеспечиваем корректное имя модуля для сериализации пайплайна.
+_feature_builder.__module__ = _MODULE_NAME
+_feature_names_out.__module__ = _MODULE_NAME
 
-    numeric_features = names[1:]  # Пропускаем 'Date'
-    date_features = ["day", "month", "weekday"]
-    return numeric_features + date_features
-
-def _build_model_pipeline() -> Pipeline:
+def _build_model_pipeline(model_type: str = "advanced") -> Pipeline:
     feature_transformer = FunctionTransformer(
         _feature_builder,
         validate=False,
-        feature_names_out=_feature_names_out,  # Заменяем "one-to-one"
+        feature_names_out=_feature_names_out,
     )
     numeric_pipeline = Pipeline(
         steps=[
@@ -206,7 +260,64 @@ def _build_model_pipeline() -> Pipeline:
         transformers=[("numeric", numeric_pipeline, list(FEATURE_COLUMNS))],
         remainder="drop",
     )
-    classifier = LogisticRegression(solver="lbfgs", multi_class="auto")
+    if model_type == "simple":
+        classifier = LogisticRegression(
+            solver="lbfgs",
+            class_weight="balanced",
+            max_iter=1000,
+            random_state=config.RANDOM_STATE,
+        )
+    elif model_type == "advanced":
+        classifier = RandomForestClassifier(
+            n_estimators=200,
+            class_weight="balanced",
+            max_depth=8,
+            min_samples_leaf=2,
+            random_state=config.RANDOM_STATE,
+            n_jobs=-1,
+        )
+    elif model_type == "ensemble":
+        classifier = VotingClassifier(
+            estimators=[
+                (
+                    "simple",
+                    LogisticRegression(
+                        solver="lbfgs",
+                        class_weight="balanced",
+                        max_iter=1000,
+                        random_state=config.RANDOM_STATE,
+                    ),
+                ),
+                (
+                    "advanced",
+                    RandomForestClassifier(
+                        n_estimators=200,
+                        class_weight="balanced",
+                        max_depth=8,
+                        min_samples_leaf=2,
+                        random_state=config.RANDOM_STATE,
+                        n_jobs=-1,
+                    ),
+                ),
+            ],
+            voting="soft",
+            weights=[0.6, 0.4],
+            n_jobs=-1,
+        )
+    elif model_type == "catboost":
+        classifier = CatBoostClassifier(
+            loss_function="MultiClass",
+            eval_metric="TotalF1:average=Macro",
+            depth=6,
+            learning_rate=0.1,
+            iterations=400,
+            l2_leaf_reg=3.0,
+            random_state=config.RANDOM_STATE,
+            verbose=False,
+            auto_class_weights="Balanced",
+        )
+    else:
+        raise ValueError(f"Unknown model_type: {model_type!r}")
     return Pipeline(
         steps=[
             ("features", feature_transformer),
@@ -232,6 +343,24 @@ def train_model(
     y = df["Category"].astype(str)
     logger.info("Обнаружено %d уникальных категорий.", y.nunique())
 
+    logger.info("Запуск 5-fold StratifiedKFold по Macro F1...")
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=config.RANDOM_STATE)
+    base_model = _build_model_pipeline(config.MODEL_TYPE)
+    cv_scores = cross_val_score(
+        base_model,
+        X,
+        y,
+        cv=cv,
+        scoring="f1_macro",
+        n_jobs=-1,
+    )
+
+    logger.info(
+        "5-fold CV Macro F1: %.3f ± %.3f",
+        cv_scores.mean(),
+        cv_scores.std(),
+    )
+
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
@@ -240,16 +369,122 @@ def train_model(
         stratify=y,
     )
 
-    model = _build_model_pipeline()
+    logger.info("Обучение модели в режиме: %s", config.MODEL_TYPE)
+    model = _build_model_pipeline(config.MODEL_TYPE)
     try:
         model.fit(X_train, y_train)
     except Exception as exc:  # pragma: no cover - обучение должно проходить успешно
         logger.exception("Ошибка обучения модели: %s", exc)
         raise
 
+
     y_pred = model.predict(X_test)
     report = classification_report(y_test, y_pred, zero_division=0)
     logger.info("=== Classification report ===\n%s", report)
+
+    labels_sorted = sorted(y_test.unique())
+    precision, recall, f1_per_class, support = precision_recall_fscore_support(
+        y_test,
+        y_pred,
+        labels=labels_sorted,
+        zero_division=0,
+    )
+    class_metrics = pd.DataFrame(
+        {
+            "Class": labels_sorted,
+            "Precision": precision,
+            "Recall": recall,
+            "F1": f1_per_class,
+            "Support": support,
+        }
+    )
+    logger.info("=== Per-class metrics ===")
+    logger.info("\n%s", class_metrics.to_string(index=False))
+
+    logger.info("=== Balanced Accuracy (равный вес классам) ===")
+    balanced_acc = balanced_accuracy_score(y_test, y_pred)
+    logger.info("Balanced Accuracy: %.3f", balanced_acc)
+
+    logger.info("=== Macro F1 (средний F1 по классам) ===")
+    macro_f1 = f1_score(y_test, y_pred, average="macro", zero_division=0)
+    logger.info("Macro F1: %.3f", macro_f1)
+
+    if config.MODEL_TYPE in {"ensemble", "catboost"}:
+        baseline_map = {
+            "simple": "Simple (LogReg)",
+            "advanced": "Advanced (RF)",
+        }
+        baseline_scores: dict[str, float] = {}
+        for base_type, label in baseline_map.items():
+            baseline_model = _build_model_pipeline(base_type)
+            baseline_model.fit(X_train, y_train)
+            base_pred = baseline_model.predict(X_test)
+            score = f1_score(y_test, base_pred, average="macro", zero_division=0)
+            baseline_scores[label] = score
+            logger.info("%s Macro F1: %.3f", label, score)
+
+        reference_log = (
+            "CatBoost" if config.MODEL_TYPE == "catboost" else "Ensemble (Voting)"
+        )
+        logger.info(
+            "%s Macro F1 vs baselines: %.3f vs LogReg %.3f vs RF %.3f",
+            reference_log,
+            macro_f1,
+            baseline_scores[baseline_map["simple"]],
+            baseline_scores[baseline_map["advanced"]],
+        )
+
+    logger.info("=== Confusion Matrix (порядок классов как в y_test.unique()) ===")
+    cm = confusion_matrix(y_test, y_pred, labels=labels_sorted)
+    logger.info("Labels order: %s", labels_sorted)
+    logger.info("Confusion matrix:\n%s", cm)
+
+    logger.info("=== Calibrated model + custom thresholds (offline analysis) ===")
+    try:
+        calibrated = CalibratedClassifierCV(model, method="sigmoid", cv=3)
+        calibrated.fit(X_train, y_train)
+
+        proba = calibrated.predict_proba(X_test)
+        classes = list(calibrated.classes_)
+        class_to_idx = {cls: idx for idx, cls in enumerate(classes)}
+        custom_thresholds = {
+            "Shopping": 0.7,
+            "Rent": 0.3,
+            "Transport": 0.3,
+            "Salary": 0.4,
+        }
+
+        y_pred_adjusted: list[str] = []
+        for row_probs in proba:
+            best_idx = int(np.argmax(row_probs))
+            best_class = classes[best_idx]
+            best_score = 0.0
+            for cls, idx in class_to_idx.items():
+                threshold = custom_thresholds.get(cls, 0.5)
+                score = row_probs[idx]
+                if score >= threshold and score > best_score:
+                    best_class = cls
+                    best_score = score
+            y_pred_adjusted.append(best_class)
+
+        adjusted_macro_f1 = f1_score(
+            y_test,
+            y_pred_adjusted,
+            average="macro",
+            zero_division=0,
+        )
+        adjusted_balanced_acc = balanced_accuracy_score(y_test, y_pred_adjusted)
+        logger.info(
+            "Adjusted Macro F1 (custom thresholds): %.3f",
+            adjusted_macro_f1,
+        )
+        logger.info(
+            "Adjusted Balanced Accuracy (custom thresholds): %.3f",
+            adjusted_balanced_acc,
+        )
+    except Exception as exc:  # pragma: no cover - вспомогательный анализ
+        logger.warning("Не удалось выполнить калибровку/threshold tuning: %s", exc)
+
     logger.info("=== Class distribution (train) ===\n%s", y_train.value_counts())
     logger.info("=== Class distribution (test) ===\n%s", y_test.value_counts())
 
