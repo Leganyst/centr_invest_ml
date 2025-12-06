@@ -1,0 +1,15 @@
+[project]
+name = "category-classifier"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = []
+requires-python = ">=3.13"
+dependencies = [
+    "joblib==1.5.2",
+    "pandas>=2.3.3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

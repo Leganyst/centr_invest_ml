@@ -1,4 +1,4 @@
-from app.utils import RESOURCES_DIR
+from category_classifier.utils import RESOURCES_DIR
 
 
 DATA_PATH = RESOURCES_DIR / "data" / "ci_data.csv"

@@ -1,36 +1,34 @@
 # app/routes/category_classifier/routes.py
 
 from datetime import datetime
+
+from dishka import FromDishka
+from dishka.integrations.fastapi import DishkaRoute
 from fastapi import APIRouter, Depends
 
 from app.deps.ml import get_transaction_ml_service
-from app.services.ml.service import TransactionMLService
-from app.schemas.base import APIModel
-from app.services.ml.schemas import CategoryEnum
+from app.models.enums import TransactionCategory
+from app.schemas.base import BaseSchema
+from app.services.protocols.category_classifier import ICategoryClassifier
 
-router = APIRouter(prefix="/category", tags=["category"])
+router = APIRouter(prefix="/category", tags=["category"], route_class=DishkaRoute)
 
 
-class ClassifyRequest(APIModel):
+class ClassifyRequest(BaseSchema):
     date: datetime
     withdrawal: float
     deposit: float
     balance: float
 
 
-class ClassifyResponse(APIModel):
-    category: CategoryEnum
+class ClassifyResponse(BaseSchema):
+    category: TransactionCategory
 
 
 @router.post("/classify", response_model=ClassifyResponse)
 def classify_transaction(
     payload: ClassifyRequest,
-    ml_service: TransactionMLService = Depends(get_transaction_ml_service),
+    ml_service: FromDishka[ICategoryClassifier],
 ) -> ClassifyResponse:
-    category = ml_service(
-        date=payload.date,
-        withdrawal=payload.withdrawal,
-        deposit=payload.deposit,
-        balance=payload.balance,
-    )
+    category = ml_service.predict()
     return ClassifyResponse(category=category)

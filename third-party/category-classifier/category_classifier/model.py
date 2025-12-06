@@ -1,25 +1,15 @@
 import logging
 from pathlib import Path
-from typing import Any, Dict, Mapping, TypedDict
+from typing import Any, Dict
 
 import joblib
 import pandas as pd
 from pandas import DataFrame, Timestamp
 
-from . import config
+from category_classifier import config
+from category_classifier.schemas import Category, Transaction
 
 logger = logging.getLogger(__name__)
-
-__all__ = ["TransactionClassifier", "classifier"]
-
-
-class TransactionPayload(TypedDict, total=False):
-    """Описание структуры словаря транзакции, ожидаемой классификатором."""
-
-    date: str
-    withdrawal: float
-    deposit: float
-    balance: float
 
 
 class TransactionClassifier:
@@ -48,13 +38,13 @@ class TransactionClassifier:
                 "Run ml.train.train_model() first."
             ) from exc
 
-    def _prepare_frame(self, tx: Mapping[str, Any]) -> DataFrame:
-        timestamp = self._parse_date(tx.get("date"))
+    def _prepare_frame(self, tx: Transaction) -> DataFrame:
+        timestamp = self._parse_date(tx.date)
         row = {
             "Date": timestamp,
-            "Withdrawal": float(tx.get("withdrawal", 0.0)),
-            "Deposit": float(tx.get("deposit", 0.0)),
-            "Balance": float(tx.get("balance", 0.0)),
+            "Withdrawal": tx.withdrawal,
+            "Deposit": tx.deposit,
+            "Balance": tx.balance,
         }
         frame = pd.DataFrame([row])
         return frame[self.input_cols]
@@ -66,13 +56,13 @@ class TransactionClassifier:
             raise ValueError(f"Cannot parse transaction date: {value!r}")
         return timestamp
 
-    def predict_category(self, tx: Mapping[str, Any]) -> str:
+    def predict_category(self, tx: Transaction) -> Category:
         """Предсказывает наиболее вероятную категорию для транзакции."""
         features = self._prepare_frame(tx)
         pred = self.model.predict(features)[0]
-        return str(pred)
+        return Category(pred)
 
-    def predict_proba(self, tx: Mapping[str, Any]) -> Dict[str, float]:
+    def predict_proba(self, tx: Transaction) -> dict[Category, float]:
         """Возвращает распределение вероятностей по категориям."""
         if not hasattr(self.model, "predict_proba"):
             raise NotImplementedError("Underlying model does not provide predict_proba.")
@@ -82,19 +72,19 @@ class TransactionClassifier:
         classes = getattr(self.model, "classes_", None)
         if classes is None:
             raise RuntimeError("Model does not expose classes_ attribute.")
-        return {str(label): float(score) for label, score in zip(classes, proba)}
-
-
-classifier: TransactionClassifier | None = None
+        return {
+            Category(label): float(score)
+            for label, score in zip(classes, proba)
+        }
 
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    sample_tx: TransactionPayload = {
-        "date": "2023-01-03",
-        "withdrawal": 100.0,
-        "deposit": 0.0,
-        "balance": 1500.0,
-    }
-    clf = TransactionClassifier()  # здесь можно, ты явно запускаешь модель после тренинга
+    sample_tx: Transaction = Transaction(
+        date="2023-01-03",
+        withdrawal=100.0,
+        deposit=0.0,
+        balance=1500.0,
+    )
+    clf = TransactionClassifier()
     print("Predicted category:", clf.predict_category(sample_tx))

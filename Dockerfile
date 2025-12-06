@@ -5,6 +5,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.9.15 /uv /uvx /bin/
 WORKDIR /opt
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-install-project
+
 ENV PATH="/opt/.venv/bin:$PATH"
 
 FROM builder AS production
@@ -16,5 +17,6 @@ USER app
 
 COPY --chown=app app app/
 COPY --chown=app resources resources/
+COPY --chown=app third-party third-party/
 
 ENTRYPOINT ["python", "-m", "app"]

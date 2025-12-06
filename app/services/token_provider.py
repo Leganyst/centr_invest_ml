@@ -1,8 +1,10 @@
 from app.schemas.auth import UserPrincipal
+from app.services.protocols.token_provider import ITokenProvider
 from app.settings.app import AppSettings
 import jwt
 
-class TokenProvider:
+
+class JwtTokenProvider(ITokenProvider):
     algorithm = "HS256"
 
     def __init__(self, settings: AppSettings) -> None:
