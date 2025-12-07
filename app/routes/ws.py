@@ -1,7 +1,7 @@
 from typing import Annotated
 
 from dishka import AsyncContainer, FromDishka, Scope
-from dishka.integrations.fastapi import DishkaRoute
+from dishka.integrations.fastapi import DishkaRoute, inject
 from fastapi import APIRouter, WebSocket
 from fastapi.params import Query
 from fastapi.security import HTTPAuthorizationCredentials
@@ -9,18 +9,19 @@ from fastapi.security import HTTPAuthorizationCredentials
 from app.deps.auth import CurrentUserFinder
 from app.services.providers.protocols.notification_manager import INotificationManager
 
-router = APIRouter(route_class=DishkaRoute, prefix="/notifications")
+router = APIRouter(prefix="/notifications")
 
 
 @router.websocket("/ws")
+@inject
 async def notifications_ws(
-    container: AsyncContainer,
+    container: FromDishka[AsyncContainer],
     token: Annotated[str, Query()],
     socket: WebSocket,
     notifications: FromDishka[INotificationManager],
 ):
-    async with container(scope=Scope.REQUEST) as container:
-        get_user = await container.get(CurrentUserFinder)
+    async with container as request_container:
+        get_user = await request_container.get(CurrentUserFinder)
         user = await get_user(
             HTTPAuthorizationCredentials(credentials=token, scheme="Bearer")
         )

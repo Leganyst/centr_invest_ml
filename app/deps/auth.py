@@ -64,6 +64,7 @@ class AuthServicesProvider(Provider):
 
     register = provide(UserRegisterInteractor)
     login = provide(UserLoginInteractor)
+    current_user = provide(CurrentUserFinder)
 
     header_name = "Authorization"
     header_prefix = "bearer"
