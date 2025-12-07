@@ -1,9 +1,12 @@
+from dataclasses import dataclass
 from typing import Annotated, Any
 
 from annotated_types import Ge, Le
 from fastapi.params import Depends, Query
-from sqlalchemy import ColumnElement, Select
+from sqlalchemy import ColumnElement, Select, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models import BaseModel
 from app.schemas.base import BaseSchema
 from collections.abc import Sequence
 
@@ -48,3 +51,30 @@ def apply_pagination[T: tuple[Any, ...]](
             default_ordering = [default_ordering]
         query = query.order_by(*default_ordering)
     return query
+
+
+@dataclass
+class PaginatedResponse[T: BaseModel]:
+    items: list[T]
+    total: int
+
+    @classmethod
+    async def of(
+        cls,
+        session: AsyncSession,
+        query: Select[tuple[T]],
+        page: PaginatedSchema | None = None,
+    ) -> "PaginatedResponse[T]":
+        total = await session.scalar(select(func.count(query.c.id)))
+        if page:
+            query = apply_pagination(query, page)
+        items = await session.scalars(query)
+        return cls(
+            total=total,
+            items=list(items),
+        )
+
+
+class PaginatedResponseSchema[T: BaseSchema](BaseSchema):
+    items: list[T]
+    total: int

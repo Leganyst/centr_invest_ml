@@ -12,7 +12,7 @@ from app.deps.auth import CurrentUser, CurrentUserDependency
 from app.models import Transaction
 from app.schemas.base import BaseSchema
 from app.schemas.transactions import TransactionSchema
-from app.services.filters import Paginated
+from app.services.filters import Paginated, PaginatedResponseSchema
 from app.services.transactions import TransactionImporter, TransactionRetrieveInteractor
 
 router = APIRouter(
@@ -42,9 +42,11 @@ async def list_transactions(
     current_user: CurrentUser,
     service: FromDishka[TransactionRetrieveInteractor],
     page: Paginated,
-) -> list[TransactionSchema]:
+) -> PaginatedResponseSchema[TransactionSchema]:
     transactions = await service.all(
         Transaction.user_id == current_user.id,
         page=page,
     )
-    return TypeAdapter(list[TransactionSchema]).validate_python(transactions)
+    return TypeAdapter(PaginatedResponseSchema[TransactionSchema]).validate_python(
+        transactions
+    )

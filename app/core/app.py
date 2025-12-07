@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
         args=(
             container,
             TransactionBackgroundClassifier,
-            operator.attrgetter("__call__"),
+            operator.call,
         ),
         trigger="interval",
         id="background-transaction-classifier",

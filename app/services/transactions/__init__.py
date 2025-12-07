@@ -1,17 +1,20 @@
 import logging
 from io import StringIO
-from typing import Iterable
 from uuid import UUID
 
 from dishka import Provider, Scope, provide
 from fastapi import UploadFile
 from pydantic import TypeAdapter
-from sqlalchemy import select, update, case
+from sqlalchemy import cast, select, update, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import TransactionCategory
 from app.schemas.transactions import TransactionCreateSchema, TransactionSchema
-from app.services.filters import FilterType, PaginatedSchema, apply_pagination
+from app.services.filters import (
+    FilterType,
+    PaginatedResponse,
+    PaginatedSchema,
+)
 from app.models.transaction import Transaction
 from app.deps.auth import CurrentUser
 import csv
@@ -27,20 +30,11 @@ class TransactionRetrieveInteractor:
 
     async def all(
         self, filters: FilterType | None = None, page: PaginatedSchema | None = None
-    ) -> Iterable[Transaction]:
+    ) -> PaginatedResponse[Transaction]:
         query = select(Transaction)
-        if filters:
+        if filters is not None:
             query = query.where(filters)
-        if page:
-            query = apply_pagination(
-                query,
-                page,
-                default_ordering=[
-                    Transaction.date.desc(),
-                    Transaction.created_at.desc(),
-                ],
-            )
-        return await self.session.scalars(query)
+        return await PaginatedResponse.of(self.session, query, page=page)
 
 
 class TransactionBulkCreateInteractor:
@@ -91,11 +85,10 @@ class TransactionBackgroundClassifier:
         self.classifier = classifier
 
     async def __call__(self):
-        transactions_for_update = list(
-            await self.retriever.all(
-                Transaction.category.is_(None), PaginatedSchema(limit=10)
-            )
+        transactions = await self.retriever.all(
+            Transaction.category.is_(None), PaginatedSchema(limit=10)
         )
+        transactions_for_update = transactions.items
         if not transactions_for_update:
             return
         logger.info("Found %s transactions", len(transactions_for_update))
@@ -108,7 +101,10 @@ class TransactionBackgroundClassifier:
         await self.session.execute(
             update(Transaction).values(
                 category=case(
-                    *[(Transaction.id == key, value) for key, value in updates.items()]
+                    *[
+                        (Transaction.id == key, cast(value, Transaction.category.type))
+                        for key, value in updates.items()
+                    ]
                 )
             )
         )
