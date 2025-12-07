@@ -1,14 +1,17 @@
 from app.models.enums import TransactionCategory
 from app.schemas.transactions import TransactionSchema
-from app.services.providers.protocols.category_classifier import PredictionResult
-from app.settings.ml import ModelSettings
+from app.services.providers.protocols.category_classifier import (
+    ICategoryClassifier,
+    PredictionResult,
+)
 from category_classifier import CategoryClassifierService
-from category_classifier.schemas import Transaction
+from category_classifier.schemas import Transaction, Category
 
 
-class MlCategoryClassifier:
-    def __init__(self, settings: ModelSettings):
-        self.classifier = CategoryClassifierService(model_path=settings.model_path)
+class MlCategoryClassifier(ICategoryClassifier):
+    def __init__(self):
+        self.classifier = CategoryClassifierService()
+        assert all(TransactionCategory(i) for i in Category)
 
     def predict(self, transaction: TransactionSchema) -> PredictionResult:
         tx = Transaction(

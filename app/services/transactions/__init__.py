@@ -9,7 +9,7 @@ from uuid import UUID
 from dishka import Provider, Scope, provide
 from fastapi import UploadFile
 from pydantic import TypeAdapter
-from sqlalchemy import case, select, update
+from sqlalchemy import case, select, update, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.deps.auth import CurrentUser
@@ -112,8 +112,13 @@ class TransactionBackgroundClassifier:
             .where(Transaction.id.in_(updates.keys()))
             .values(
                 category=case(
-                    *[(Transaction.id == key, value) for key, value in updates.items()],
-                    else_=Transaction.category,
+                    *[
+                        (
+                            Transaction.id == key,
+                            cast(value.name, Transaction.category.type),
+                        )
+                        for key, value in updates.items()
+                    ]
                 )
             )
         )
