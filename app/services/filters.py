@@ -15,7 +15,7 @@ type FilterType = ColumnElement[bool]
 
 
 class PaginatedSchema(BaseSchema):
-    limit: Annotated[int, Ge(ge=1), Le(le=100)] = 10
+    limit: Annotated[int, Ge(ge=1), Le(le=10000)] = 100
     offset: Annotated[int, Ge(ge=0)] = 0
     ordering: str | None = None
 

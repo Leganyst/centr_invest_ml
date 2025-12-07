@@ -14,7 +14,7 @@ router = APIRouter(route_class=DishkaRoute)
 router.include_router(auth_router)
 router.include_router(users_router)
 router.include_router(transactions_router)
-router.include_router(ws_router)
+router.include_router(ws_router, prefix="/ws")
 
 
 @router.get("/health")

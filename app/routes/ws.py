@@ -12,7 +12,7 @@ from app.services.providers.protocols.notification_manager import INotificationM
 router = APIRouter(prefix="/notifications")
 
 
-@router.websocket("/ws")
+@router.websocket("")
 @inject
 async def notifications_ws(
     container: FromDishka[AsyncContainer],
@@ -27,6 +27,7 @@ async def notifications_ws(
         )
         await socket.accept()
         user_id = user.id
+    await socket.send_json({"detail": "authenticated", "user_id": user_id})
 
     while True:
         notification = await notifications.pop(user_id)
