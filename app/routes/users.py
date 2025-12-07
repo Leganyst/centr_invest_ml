@@ -13,7 +13,8 @@ router = APIRouter(prefix="/users", tags=["users"], route_class=DishkaRoute)
 
 
 @router.get("", dependencies=[permission_required(UserRole.ADMIN)])
-async def list_users(retrieve_users: FromDishka[RetrieveUserInteractor],
-                     paginate: Paginated) -> list[UserRetrieveSchema]:
+async def list_users(
+    retrieve_users: FromDishka[RetrieveUserInteractor], paginate: Paginated
+) -> list[UserRetrieveSchema]:
     users = await retrieve_users.all(paginate=paginate)
     return TypeAdapter(list[UserRetrieveSchema]).validate_python(users)

@@ -2,7 +2,7 @@ import contextlib
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import field_validator, model_validator
+from pydantic import field_validator
 
 from app.models.enums import TransactionCategory
 from app.schemas.base import BaseSchema
@@ -24,9 +24,7 @@ class TransactionCreateSchema(BaseSchema):
         return v
 
 
-
 class TransactionSchema(TransactionCreateSchema):
     id: UUID
     created_at: datetime
     updated_at: datetime
-

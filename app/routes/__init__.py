@@ -14,14 +14,12 @@ router.include_router(auth_router)
 router.include_router(users_router)
 router.include_router(transactions_router)
 
+
 @router.get("/health")
 async def health(scheduler: FromDishka[BaseScheduler]) -> HealthSchema:
     jobs = [
-        JobSchema(
-            id=job.id,
-            next_run_time=job.next_run_time,
-            name=job.name
-        ) for job in scheduler.get_jobs()
+        JobSchema(id=job.id, next_run_time=job.next_run_time, name=job.name)
+        for job in scheduler.get_jobs()
     ]
     return HealthSchema(
         status="ok",

@@ -6,35 +6,42 @@ from dishka.integrations.fastapi import DishkaRoute
 from fastapi import APIRouter, UploadFile
 from fastapi.params import File
 from fastapi_cloud_cli.utils.pydantic_compat import TypeAdapter
+from starlette import status
 
 from app.deps.auth import CurrentUser, CurrentUserDependency
 from app.models import Transaction
+from app.schemas.base import BaseSchema
 from app.schemas.transactions import TransactionSchema
 from app.services.filters import Paginated
-from app.services.transactions import TransactionImporter, \
-    TransactionRetrieveInteractor
+from app.services.transactions import TransactionImporter, TransactionRetrieveInteractor
 
 router = APIRouter(
-    prefix="/transactions", tags=["transactions"],
+    prefix="/transactions",
+    tags=["transactions"],
     route_class=DishkaRoute,
-    dependencies=[CurrentUserDependency]
+    dependencies=[CurrentUserDependency],
 )
 logger = logging.getLogger(__name__)
 
 
-@router.post("/import", response_model=None)
+class TransactionImportResponseSchema(BaseSchema):
+    count: int
+
+
+@router.post("/import", status_code=status.HTTP_201_CREATED)
 async def import_transactions(
     service: FromDishka[TransactionImporter],
     file: Annotated[UploadFile, File()],
-) -> None:
-    await service(file)
+) -> TransactionImportResponseSchema:
+    transactions = await service(file)
+    return TransactionImportResponseSchema(count=len(transactions))
 
 
 @router.get("")
 async def list_transactions(
-        current_user: CurrentUser,
-        service: FromDishka[TransactionRetrieveInteractor],
-        page: Paginated,
+    current_user: CurrentUser,
+    service: FromDishka[TransactionRetrieveInteractor],
+    page: Paginated,
 ) -> list[TransactionSchema]:
     transactions = await service.all(
         Transaction.user_id == current_user.id,

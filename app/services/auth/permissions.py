@@ -1,5 +1,3 @@
-from typing import Annotated
-
 from fastapi.params import Depends
 
 from app.models.enums import UserRole

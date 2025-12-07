@@ -1,0 +1,37 @@
+name: Deploy backend to server
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4.2.2
+      - name: Prepare SSH
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USERNAME: ${{ secrets.SSH_USERNAME }}
+          SSH_KEY: ${{ secrets.SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan "$SSH_HOST" > ~/.ssh/known_hosts
+          docker context create remote  --docker "host=ssh://$SSH_USERNAME@$SSH_HOST:$SSH_PORT"
+      - name: Deploy
+        env:
+          DB_USERNAME: ${{ secrets.DB_USERNAME }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_DATABASE: ${{ vars.DB_DATABASE }}
+          APP_JWT_SECRET: ${{ secrets.APP_JWT_SECRET }}
+        run: |
+          docker --context remote compose up -d --build
+      - name: Cleanup
+        run: rm -f ssh_key
