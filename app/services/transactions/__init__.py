@@ -1,27 +1,27 @@
+import asyncio
+import csv
 import logging
+from collections import defaultdict
+from datetime import datetime
 from io import StringIO
 from uuid import UUID
-import asyncio
+
 from dishka import Provider, Scope, provide
 from fastapi import UploadFile
 from pydantic import TypeAdapter
-from sqlalchemy import cast, select, update, case
+from sqlalchemy import case, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.deps.auth import CurrentUser
 from app.models.enums import TransactionCategory
+from app.models.transaction import Transaction
+from app.schemas import ml as ml_schemas
 from app.schemas.notifications import NotificationSchema
 from app.schemas.transactions import TransactionCreateSchema, TransactionSchema
-from app.services.filters import (
-    FilterType,
-    PaginatedResponse,
-    PaginatedSchema,
-)
-from app.models.transaction import Transaction
-from app.deps.auth import CurrentUser
-import csv
-
+from app.services.filters import FilterType, PaginatedResponse, PaginatedSchema
 from app.services.providers.protocols.category_classifier import ICategoryClassifier
 from app.services.providers.protocols.notification_manager import INotificationManager
+from app.settings.ml import ModelSettings
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +50,7 @@ class TransactionBulkCreateInteractor:
             withdrawal=transaction.withdrawal,
             deposit=transaction.deposit,
             balance=transaction.balance,
+            category=transaction.category,
             user_id=self.current_user.id,
         )
 
@@ -99,33 +100,160 @@ class TransactionBackgroundClassifier:
         updates: dict[UUID, TransactionCategory] = {}
         users_for_notifications: set[UUID] = set()
         for transaction in transactions_for_update:
-            category = self.classifier.predict(
+            prediction = self.classifier.predict(
                 TransactionSchema.model_validate(transaction)
             )
-            updates[transaction.id] = category
+            updates[transaction.id] = prediction.category
             users_for_notifications.add(transaction.user_id)
+        if not updates:
+            return
         await self.session.execute(
-            update(Transaction).values(
+            update(Transaction)
+            .where(Transaction.id.in_(updates.keys()))
+            .values(
                 category=case(
-                    *[
-                        (Transaction.id == key, cast(value, Transaction.category.type))
-                        for key, value in updates.items()
-                    ]
+                    *[(Transaction.id == key, value) for key, value in updates.items()],
+                    else_=Transaction.category,
                 )
             )
         )
-        await asyncio.gather(
-            *[
-                self.notifications.send(
-                    user,
-                    NotificationSchema(
-                        user_id=user,
-                        text="Была выполнена классификация ваших транзакций",
-                        type="transaction-classifier",
-                    ),
+        if users_for_notifications:
+            await asyncio.gather(
+                *[
+                    self.notifications.send(
+                        user,
+                        NotificationSchema(
+                            user_id=user,
+                            text="Была выполнена классификация ваших транзакций",
+                            type="transaction-classifier",
+                        ),
+                    )
+                    for user in users_for_notifications
+                ]
+            )
+
+
+class TransactionAnalyticsInteractor:
+    def __init__(
+        self,
+        session: AsyncSession,
+        classifier: ICategoryClassifier,
+        model_settings: ModelSettings,
+    ):
+        self.session = session
+        self.classifier = classifier
+        self.model_settings = model_settings
+
+    async def for_user(self, user_id: UUID) -> ml_schemas.CSVUploadResponse:
+        transactions = list(
+            await self.session.scalars(
+                select(Transaction)
+                .where(Transaction.user_id == user_id)
+                .order_by(Transaction.date, Transaction.created_at)
+            )
+        )
+        total_rows = len(transactions)
+        rows: list[ml_schemas.RowResult] = []
+
+        summary_by_category: dict[TransactionCategory, dict[str, float]] = defaultdict(
+            lambda: {"count": 0, "amount": 0.0}
+        )
+        timeseries_amounts: dict[str, dict[TransactionCategory, float]] = defaultdict(
+            lambda: defaultdict(float)
+        )
+        timeseries_totals: dict[str, float] = defaultdict(float)
+
+        for transaction in transactions:
+            try:
+                tx_schema = TransactionSchema.model_validate(transaction)
+                prediction = self.classifier.predict(tx_schema)
+                predicted_category = prediction.category
+                probabilities = {
+                    category.value: float(probability)
+                    for category, probability in prediction.probabilities.items()
+                }
+                category_value = transaction.category or predicted_category
+                if transaction.category is None:
+                    transaction.category = predicted_category
+                category_enum = ml_schemas.CategoryEnum(category_value.value)
+            except Exception:
+                logger.exception(
+                    "Failed to classify transaction %s for analytics",
+                    getattr(transaction, "id", None),
                 )
-                for user in users_for_notifications
-            ]
+                continue
+
+            amount = (
+                transaction.withdrawal
+                if transaction.withdrawal > 0
+                else transaction.deposit
+            )
+            amount_value = float(amount or 0.0)
+
+            summary_entry = summary_by_category[category_value]
+            summary_entry["count"] += 1
+            summary_entry["amount"] += amount_value
+
+            period = transaction.date.strftime("%Y-%m")
+            timeseries_totals[period] += amount_value
+            timeseries_amounts[period][category_value] += amount_value
+
+            row_index = len(rows)
+            rows.append(
+                ml_schemas.RowResult(
+                    index=row_index,
+                    date=datetime.combine(transaction.date, datetime.min.time()),
+                    withdrawal=float(transaction.withdrawal),
+                    deposit=float(transaction.deposit),
+                    balance=float(transaction.balance),
+                    predicted_category=category_enum,
+                    probabilities=probabilities,
+                    actual_category=None,
+                )
+            )
+
+        summary = [
+            ml_schemas.CategorySummary(
+                category=ml_schemas.CategoryEnum(category.value),
+                count=values["count"],
+                amount=values["amount"],
+            )
+            for category, values in summary_by_category.items()
+        ]
+
+        timeseries_entries = [
+            ml_schemas.TimeseriesEntry(
+                period=period,
+                total_amount=timeseries_totals[period],
+                by_category={
+                    category.value: amount for category, amount in by_category.items()
+                },
+            )
+            for period, by_category in sorted(timeseries_amounts.items())
+        ]
+
+        meta = ml_schemas.MetaInfo(
+            total_rows=total_rows,
+            processed_rows=len(rows),
+            failed_rows=total_rows - len(rows),
+            model_type=self.model_settings.model_type,
+            model_version=self.model_settings.model_path.name,
+        )
+        metrics = ml_schemas.MetricsBlock(
+            has_ground_truth=False,
+            macro_f1=None,
+            balanced_accuracy=None,
+            accuracy=None,
+        )
+
+        return ml_schemas.CSVUploadResponse(
+            meta=meta,
+            summary=ml_schemas.SummaryBlock(
+                by_category=summary,
+                timeseries=timeseries_entries,
+            ),
+            rows=rows,
+            metrics=metrics,
         )
 
 
@@ -135,4 +263,5 @@ class TransactionServicesProvider(Provider):
     retrieve = provide(TransactionRetrieveInteractor)
     importer = provide(TransactionImporter)
     background_classifier = provide(TransactionBackgroundClassifier)
+    analytics = provide(TransactionAnalyticsInteractor)
     bulk_create = provide(TransactionBulkCreateInteractor)

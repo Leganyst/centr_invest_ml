@@ -10,10 +10,15 @@ from starlette import status
 
 from app.deps.auth import CurrentUser, CurrentUserDependency
 from app.models import Transaction
+from app.schemas import ml as ml_schemas
 from app.schemas.base import BaseSchema
 from app.schemas.transactions import TransactionSchema
 from app.services.filters import Paginated, PaginatedResponseSchema
-from app.services.transactions import TransactionImporter, TransactionRetrieveInteractor
+from app.services.transactions import (
+    TransactionAnalyticsInteractor,
+    TransactionImporter,
+    TransactionRetrieveInteractor,
+)
 
 router = APIRouter(
     prefix="/transactions",
@@ -50,3 +55,11 @@ async def list_transactions(
     return TypeAdapter(PaginatedResponseSchema[TransactionSchema]).validate_python(
         transactions
     )
+
+
+@router.get("/analytics", response_model=ml_schemas.CSVUploadResponse)
+async def transactions_analytics(
+    current_user: CurrentUser,
+    analytics: FromDishka[TransactionAnalyticsInteractor],
+) -> ml_schemas.CSVUploadResponse:
+    return await analytics.for_user(current_user.id)
