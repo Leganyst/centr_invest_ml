@@ -14,6 +14,7 @@ class UserRetrieveSchema(UserPrincipal):
     email: EmailStr
     name: str
 
+
 class AuthenticationResponseSchema(BaseSchema):
     access_token: str
     user: UserRetrieveSchema

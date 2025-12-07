@@ -22,32 +22,36 @@ oauth2_scheme = HTTPBearer()
 logger = logging.getLogger(__name__)
 
 
-async def _current_user(
-    token: HTTPAuthorizationCredentials,
-    token_encoder: ITokenProvider,
-    retrieve_user_interactor: RetrieveUserInteractor,
-) -> User:
-    if not token or not token.credentials:
-        raise AuthenticationError()
-    try:
-        user = token_encoder.decode_token(token.credentials)
-    except Exception:
-        logger.debug("Failed to decode token", exc_info=True)
-        raise AuthenticationError()
-    db_user = await retrieve_user_interactor.get(User.id == user.user_id)
-    if not db_user:
-        logger.debug("Failed to retrieve user %s", repr(db_user))
-        raise AuthenticationError()
-    return db_user
+class CurrentUserFinder:
+    def __init__(
+        self,
+        token_encoder: ITokenProvider,
+        retrieve_user_interactor: RetrieveUserInteractor,
+    ):
+        self.token_encoder = token_encoder
+        self.retrieve_user_interactor = retrieve_user_interactor
+
+    async def __call__(self, token: HTTPAuthorizationCredentials) -> User:
+        if not token or not token.credentials:
+            raise AuthenticationError()
+        try:
+            user = self.token_encoder.decode_token(token.credentials)
+        except Exception:
+            logger.debug("Failed to decode token", exc_info=True)
+            raise AuthenticationError()
+        db_user = await self.retrieve_user_interactor.get(User.id == user.user_id)
+        if not db_user:
+            logger.debug("Failed to retrieve user %s", repr(db_user))
+            raise AuthenticationError()
+        return db_user
 
 
 @inject
 async def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials, Depends(oauth2_scheme)],
-    token_provider: FromDishka[ITokenProvider],
-    retrieve_user_interactor: FromDishka[RetrieveUserInteractor],
+    get_user: FromDishka[CurrentUserFinder],
 ) -> User:
-    return await _current_user(credentials, token_provider, retrieve_user_interactor)
+    return await get_user(credentials)
 
 
 _CurrentUser = NewType("_CurrentUser", User)
@@ -78,14 +82,6 @@ class AuthServicesProvider(Provider):
     async def get_current_user(
         self,
         token: HTTPAuthorizationCredentials,
-        token_encoder: ITokenProvider,
-        retrieve_user_interactor: RetrieveUserInteractor,
+        get_user: CurrentUserFinder,
     ) -> _CurrentUser:
-        return cast(
-            _CurrentUser,
-            await _current_user(
-                token=token,
-                token_encoder=token_encoder,
-                retrieve_user_interactor=retrieve_user_interactor,
-            ),
-        )
+        return cast(_CurrentUser, await get_user(token))

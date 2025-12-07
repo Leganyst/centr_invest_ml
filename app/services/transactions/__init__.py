@@ -1,7 +1,7 @@
 import logging
 from io import StringIO
 from uuid import UUID
-
+import asyncio
 from dishka import Provider, Scope, provide
 from fastapi import UploadFile
 from pydantic import TypeAdapter
@@ -9,6 +9,7 @@ from sqlalchemy import cast, select, update, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import TransactionCategory
+from app.schemas.notifications import NotificationSchema
 from app.schemas.transactions import TransactionCreateSchema, TransactionSchema
 from app.services.filters import (
     FilterType,
@@ -20,6 +21,7 @@ from app.deps.auth import CurrentUser
 import csv
 
 from app.services.providers.protocols.category_classifier import ICategoryClassifier
+from app.services.providers.protocols.notification_manager import INotificationManager
 
 logger = logging.getLogger(__name__)
 
@@ -79,10 +81,12 @@ class TransactionBackgroundClassifier:
         session: AsyncSession,
         retriever: TransactionRetrieveInteractor,
         classifier: ICategoryClassifier,
+        notifications: INotificationManager,
     ):
         self.session = session
         self.retriever = retriever
         self.classifier = classifier
+        self.notifications = notifications
 
     async def __call__(self):
         transactions = await self.retriever.all(
@@ -93,11 +97,13 @@ class TransactionBackgroundClassifier:
             return
         logger.info("Found %s transactions", len(transactions_for_update))
         updates: dict[UUID, TransactionCategory] = {}
+        users_for_notifications: set[UUID] = set()
         for transaction in transactions_for_update:
             category = self.classifier.predict(
                 TransactionSchema.model_validate(transaction)
             )
             updates[transaction.id] = category
+            users_for_notifications.add(transaction.user_id)
         await self.session.execute(
             update(Transaction).values(
                 category=case(
@@ -107,6 +113,19 @@ class TransactionBackgroundClassifier:
                     ]
                 )
             )
+        )
+        await asyncio.gather(
+            *[
+                self.notifications.send(
+                    user,
+                    NotificationSchema(
+                        user_id=user,
+                        text="Была выполнена классификация ваших транзакций",
+                        type="transaction-classifier",
+                    ),
+                )
+                for user in users_for_notifications
+            ]
         )
 
 

@@ -7,8 +7,10 @@ from pydantic_settings import BaseSettings
 from app.deps.auth import AuthServicesProvider
 from app.deps.db import DbConnectionProvider
 from app.services.providers.category_classifier import MlCategoryClassifier
+from app.services.providers.notification_manager import AsyncioNotificationManager
 from app.services.providers.password_encoder import BcryptPasswordEncoder
 from app.services.providers.protocols.category_classifier import ICategoryClassifier
+from app.services.providers.protocols.notification_manager import INotificationManager
 from app.services.providers.protocols.password_encoder import IPasswordEncoder
 from app.services.providers.protocols.token_provider import ITokenProvider
 from app.services.providers.token_provider import JwtTokenProvider
@@ -37,6 +39,9 @@ def create_container() -> AsyncContainer:
     )
     provider.provide(
         lambda: AsyncIOScheduler(), provides=BaseScheduler, scope=Scope.APP
+    )
+    provider.provide(
+        AsyncioNotificationManager, provides=INotificationManager, scope=Scope.APP
     )
 
     container = make_async_container(
