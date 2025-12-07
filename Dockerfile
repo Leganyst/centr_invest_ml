@@ -1,10 +1,15 @@
-FROM python:3.13-alpine AS builder
+FROM python:3.13-slim AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:0.9.15 /uv /uvx /bin/
-RUN apk add --virtual .builddeps g++ musl-dev
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    ninja-build \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
-
-RUN adduser -D app
+RUN adduser app
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
