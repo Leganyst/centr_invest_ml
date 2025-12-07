@@ -34,12 +34,12 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer, StandardScaler
 
 
-from ....ml.trainee import config
+from category_classifier import config
 
 logger = logging.getLogger(__name__)
 
 if __name__ == "__main__":
-    sys.modules["ml.train"] = sys.modules[__name__]
+    sys.modules["category_classifier.train"] = sys.modules[__name__]
 
 REQUIRED_COLUMNS = ("Date", "Withdrawal", "Deposit", "Balance", "Category")
 RAW_FEATURE_COLUMNS = ("Date", "Withdrawal", "Deposit", "Balance")
@@ -67,7 +67,7 @@ DATE_FORMATS = (
     "%d/%m/%Y",
     "%d/%m/%y",
 )
-_MODULE_NAME = "ml.train"
+_MODULE_NAME = "category_classifier.train"
 
 
 def _feature_names_out(transformer, feature_names_in):

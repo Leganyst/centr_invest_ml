@@ -39,7 +39,7 @@ class TransactionClassifier:
             return joblib.load(path)
         except FileNotFoundError as exc:  # pragma: no cover - explicit message
             raise FileNotFoundError(
-                f"Model artifact not found at {path}. Run ml.train.train_model() first."
+                f"Model artifact not found at {path}. Run category_classifier.train.train_model() first."
             ) from exc
 
     def _prepare_frame(self, tx: Transaction) -> DataFrame:
