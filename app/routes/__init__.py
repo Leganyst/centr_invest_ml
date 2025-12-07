@@ -5,14 +5,16 @@ from dishka.integrations.fastapi import DishkaRoute
 
 from app.schemas.health import HealthSchema, JobSchema
 from app.routes.auth import router as auth_router
-from app.routes.users import router as users_router
+from app.routes.ml import router as ml_router
 from app.routes.transactions import router as transactions_router
+from app.routes.users import router as users_router
 from app.routes.ws import router as ws_router
 
 
 router = APIRouter(route_class=DishkaRoute)
 router.include_router(auth_router)
 router.include_router(users_router)
+router.include_router(ml_router)
 router.include_router(transactions_router)
 router.include_router(ws_router, prefix="/ws")
 
