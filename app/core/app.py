@@ -55,7 +55,7 @@ async def lifespan(app: FastAPI):
 def create_app() -> FastAPI:
     container = create_container()
     settings = asyncio.run(container.get(AppSettings))
-    app = FastAPI(lifespan=lifespan, title=settings.app_name)
+    app = FastAPI(lifespan=lifespan, title=settings.app_name, root_path="/api")
     register_exception_handlers(app)
     setup_dishka(container, app=app)
     app.include_router(api_router)

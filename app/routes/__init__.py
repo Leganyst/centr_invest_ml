@@ -9,7 +9,7 @@ from app.routes.users import router as users_router
 from app.routes.transactions import router as transactions_router
 
 
-router = APIRouter(prefix="/api", route_class=DishkaRoute)
+router = APIRouter(route_class=DishkaRoute)
 router.include_router(auth_router)
 router.include_router(users_router)
 router.include_router(transactions_router)
