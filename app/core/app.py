@@ -20,9 +20,9 @@ logger = logging.getLogger(__name__)
 
 
 async def service_runner[T](
-        container: AsyncContainer,
-        target: type[T],
-        action: Callable[[T], Awaitable[Any]],
+    container: AsyncContainer,
+    target: type[T],
+    action: Callable[[T], Awaitable[Any]],
 ) -> None:
     async with container(scope=Scope.REQUEST) as request_container:
         service = await request_container.get(target)
@@ -32,7 +32,6 @@ async def service_runner[T](
             logger.exception("Background service error")
 
 
-
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     container: AsyncContainer = app.state.dishka_container
@@ -40,7 +39,11 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     scheduler.add_job(
         service_runner,
-        args=(container, TransactionBackgroundClassifier, operator.attrgetter("__call__")),
+        args=(
+            container,
+            TransactionBackgroundClassifier,
+            operator.attrgetter("__call__"),
+        ),
         trigger="interval",
         id="background-transaction-classifier",
         minutes=1,

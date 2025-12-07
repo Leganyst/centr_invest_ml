@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 async def _current_user(
     token: HTTPAuthorizationCredentials,
     token_encoder: ITokenProvider,
-    retrieve_user_interactor: RetrieveUserInteractor) -> User:
+    retrieve_user_interactor: RetrieveUserInteractor,
+) -> User:
     if not token or not token.credentials:
         raise AuthenticationError()
     try:
@@ -39,10 +40,13 @@ async def _current_user(
         raise AuthenticationError()
     return db_user
 
+
 @inject
-async def get_current_user(credentials: Annotated[HTTPAuthorizationCredentials, Depends(oauth2_scheme)],
-                           token_provider: FromDishka[ITokenProvider],
-                           retrieve_user_interactor: FromDishka[RetrieveUserInteractor]) -> User:
+async def get_current_user(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(oauth2_scheme)],
+    token_provider: FromDishka[ITokenProvider],
+    retrieve_user_interactor: FromDishka[RetrieveUserInteractor],
+) -> User:
     return await _current_user(credentials, token_provider, retrieve_user_interactor)
 
 
@@ -71,19 +75,17 @@ class AuthServicesProvider(Provider):
         return HTTPAuthorizationCredentials(scheme=scheme, credentials=credentials)
 
     @provide
-    async def get_current_user(self,
-                               token: HTTPAuthorizationCredentials,
-                               token_encoder: ITokenProvider,
-                               retrieve_user_interactor: RetrieveUserInteractor) -> _CurrentUser:
+    async def get_current_user(
+        self,
+        token: HTTPAuthorizationCredentials,
+        token_encoder: ITokenProvider,
+        retrieve_user_interactor: RetrieveUserInteractor,
+    ) -> _CurrentUser:
         return cast(
             _CurrentUser,
             await _current_user(
                 token=token,
                 token_encoder=token_encoder,
-                retrieve_user_interactor=retrieve_user_interactor
-            )
+                retrieve_user_interactor=retrieve_user_interactor,
+            ),
         )
-
-
-
-

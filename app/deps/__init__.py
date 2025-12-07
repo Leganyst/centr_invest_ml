@@ -35,7 +35,9 @@ def create_container() -> AsyncContainer:
     provider.provide(
         MlCategoryClassifier, provides=ICategoryClassifier, scope=Scope.APP
     )
-    provider.provide(lambda: AsyncIOScheduler(), provides=BaseScheduler, scope=Scope.APP)
+    provider.provide(
+        lambda: AsyncIOScheduler(), provides=BaseScheduler, scope=Scope.APP
+    )
 
     container = make_async_container(
         provider,

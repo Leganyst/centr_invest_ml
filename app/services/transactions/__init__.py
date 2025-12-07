@@ -4,9 +4,8 @@ from typing import Iterable
 from uuid import UUID
 
 from dishka import Provider, Scope, provide
-from dishka.integrations.fastapi import inject
 from fastapi import UploadFile
-from pydantic import TypeAdapter, ValidationError
+from pydantic import TypeAdapter
 from sqlalchemy import select, update, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,9 +25,9 @@ class TransactionRetrieveInteractor:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def all(self,
-            filters: FilterType | None = None,
-            page: PaginatedSchema | None = None) -> Iterable[Transaction]:
+    async def all(
+        self, filters: FilterType | None = None, page: PaginatedSchema | None = None
+    ) -> Iterable[Transaction]:
         query = select(Transaction)
         if filters:
             query = query.where(filters)
@@ -39,7 +38,7 @@ class TransactionRetrieveInteractor:
                 default_ordering=[
                     Transaction.date.desc(),
                     Transaction.created_at.desc(),
-                ]
+                ],
             )
         return await self.session.scalars(query)
 
@@ -58,7 +57,9 @@ class TransactionBulkCreateInteractor:
             user_id=self.current_user.id,
         )
 
-    async def create(self, transactions: list[TransactionCreateSchema]) -> list[Transaction]:
+    async def create(
+        self, transactions: list[TransactionCreateSchema]
+    ) -> list[Transaction]:
         transactions_db = [self._map(transaction) for transaction in transactions]
         self.session.add_all(transactions_db)
         return transactions_db
@@ -68,19 +69,23 @@ class TransactionImporter:
     def __init__(self, create_interactor: TransactionBulkCreateInteractor):
         self.create_interactor = create_interactor
 
-    async def __call__(self, file: UploadFile):
-        logger.info(f"Importing transactions from %s", file.filename)
+    async def __call__(self, file: UploadFile) -> list[Transaction]:
+        logger.info("Importing transactions from %s", file.filename)
         content = await file.read()
         reader = csv.DictReader(StringIO(content.decode()), delimiter=",")
-        transactions = TypeAdapter(list[TransactionCreateSchema]).validate_python(reader)
-        await self.create_interactor.create(transactions)
+        transactions = TypeAdapter(list[TransactionCreateSchema]).validate_python(
+            reader
+        )
+        return await self.create_interactor.create(transactions)
 
 
 class TransactionBackgroundClassifier:
-    def __init__(self,
-                 session: AsyncSession,
-                 retriever: TransactionRetrieveInteractor,
-                 classifier: ICategoryClassifier):
+    def __init__(
+        self,
+        session: AsyncSession,
+        retriever: TransactionRetrieveInteractor,
+        classifier: ICategoryClassifier,
+    ):
         self.session = session
         self.retriever = retriever
         self.classifier = classifier
@@ -88,8 +93,7 @@ class TransactionBackgroundClassifier:
     async def __call__(self):
         transactions_for_update = list(
             await self.retriever.all(
-                Transaction.category.is_(None),
-                PaginatedSchema(limit=10)
+                Transaction.category.is_(None), PaginatedSchema(limit=10)
             )
         )
         if not transactions_for_update:
@@ -97,16 +101,14 @@ class TransactionBackgroundClassifier:
         logger.info("Found %s transactions", len(transactions_for_update))
         updates: dict[UUID, TransactionCategory] = {}
         for transaction in transactions_for_update:
-            category = self.classifier.predict(TransactionSchema.model_validate(transaction))
+            category = self.classifier.predict(
+                TransactionSchema.model_validate(transaction)
+            )
             updates[transaction.id] = category
         await self.session.execute(
-            update(Transaction)
-            .values(
+            update(Transaction).values(
                 category=case(
-                    *[
-                        (Transaction.id == key, value)
-                        for key, value in updates.items()
-                    ]
+                    *[(Transaction.id == key, value) for key, value in updates.items()]
                 )
             )
         )

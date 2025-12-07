@@ -17,7 +17,9 @@ class RetrieveUserInteractor:
         value = await self.session.scalar(exists(User).select().where(query))
         return bool(value)
 
-    async def all(self, filters: FilterType | None = None, paginate: PaginatedSchema | None = None) -> Iterable[User]:
+    async def all(
+        self, filters: FilterType | None = None, paginate: PaginatedSchema | None = None
+    ) -> Iterable[User]:
         query = select(User)
         if filters:
             query = query.where(filters)

@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from app.schemas.base import BaseSchema
-from typing import Any, Literal
+from typing import Literal
 
 
 class JobSchema(BaseSchema):

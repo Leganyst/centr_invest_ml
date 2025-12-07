@@ -33,17 +33,15 @@ Paginated = Annotated[PaginatedSchema, Depends(get_pagination)]
 
 
 def apply_pagination[T: tuple[Any, ...]](
-        query: Select[T],
-        page: PaginatedSchema,
-        default_ordering: ColumnElement | Sequence[ColumnElement] | None = None,
-        ordering_mapping: dict[str, ColumnElement] | Sequence[ColumnElement] | None = None,
+    query: Select[T],
+    page: PaginatedSchema,
+    default_ordering: ColumnElement | Sequence[ColumnElement] | None = None,
+    ordering_mapping: dict[str, ColumnElement] | Sequence[ColumnElement] | None = None,
 ) -> Select[T]:
     query = query.offset(page.offset).limit(page.limit)
     if ordering_mapping:
         if not isinstance(ordering_mapping, dict):
-            ordering_mapping = {
-                column.key: column for column in ordering_mapping
-            }
+            ordering_mapping = {column.key: column for column in ordering_mapping}
         query = query.order_by(ordering_mapping[page.ordering])
     elif default_ordering is not None:
         if not isinstance(default_ordering, Sequence):
