@@ -1,17 +1,21 @@
-# syntax=docker/dockerfile:1
+FROM python:3.13-alpine AS builder
 
-FROM python:3.10-slim
+COPY --from=ghcr.io/astral-sh/uv:0.9.15 /uv /uvx /bin/
 
+RUN adduser -D app
 WORKDIR /app
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+COPY pyproject.toml uv.lock ./
+COPY --chown=app third-party third-party/
+RUN uv sync --locked --no-install-project --no-dev
+ENV PATH="/app/.venv/bin:$PATH"
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+FROM builder AS production
 
-COPY . .
+USER app
+COPY --chown=app app app/
+COPY --chown=app docker/entrypoint.sh /opt/entrypoint.sh
+COPY --chown=app alembic.ini .
 
-EXPOSE 8000
-
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+ENTRYPOINT ["/bin/sh", "/opt/entrypoint.sh"]
+CMD ["python", "-m", "app"]
