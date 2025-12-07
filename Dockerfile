@@ -1,6 +1,8 @@
 FROM python:3.13-alpine AS builder
 
 COPY --from=ghcr.io/astral-sh/uv:0.9.15 /uv /uvx /bin/
+RUN apk add --virtual .builddeps g++ musl-dev
+
 
 RUN adduser -D app
 WORKDIR /app
