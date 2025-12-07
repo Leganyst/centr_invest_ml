@@ -90,7 +90,7 @@ class TransactionBackgroundClassifier:
 
     async def __call__(self):
         transactions = await self.retriever.all(
-            Transaction.category.is_(None), PaginatedSchema(limit=10)
+            Transaction.category.is_(None), PaginatedSchema(limit=50)
         )
         transactions_for_update = transactions.items
         if not transactions_for_update:
