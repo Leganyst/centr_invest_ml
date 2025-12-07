@@ -91,7 +91,7 @@ class TransactionBackgroundClassifier:
 
     async def __call__(self):
         transactions = await self.retriever.all(
-            Transaction.category.is_(None), PaginatedSchema(limit=50)
+            Transaction.category.is_(None), PaginatedSchema(limit=3000)
         )
         transactions_for_update = transactions.items
         if not transactions_for_update:
@@ -99,12 +99,14 @@ class TransactionBackgroundClassifier:
         logger.info("Found %s transactions", len(transactions_for_update))
         updates: dict[UUID, TransactionCategory] = {}
         users_for_notifications: set[UUID] = set()
-        for transaction in transactions_for_update:
+        for index, transaction in enumerate(transactions_for_update):
             prediction = self.classifier.predict(
                 TransactionSchema.model_validate(transaction)
             )
             updates[transaction.id] = prediction.category
             users_for_notifications.add(transaction.user_id)
+            if index % 100 == 0:
+                await asyncio.sleep(0)
         if not updates:
             return
         await self.session.execute(
