@@ -1,3 +1,5 @@
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.schedulers.base import BaseScheduler
 from dishka import AsyncContainer, Provider, Scope, make_async_container
 from dishka.integrations.fastapi import FastapiProvider
 from pydantic_settings import BaseSettings
@@ -10,6 +12,8 @@ from app.services.providers.protocols.category_classifier import ICategoryClassi
 from app.services.providers.protocols.password_encoder import IPasswordEncoder
 from app.services.providers.protocols.token_provider import ITokenProvider
 from app.services.providers.token_provider import JwtTokenProvider
+from app.services.transactions import TransactionServicesProvider
+from app.services.users import UserServicesProvider
 from app.settings.app import AppSettings
 from app.settings.db import DatabaseSettings
 from app.settings.ml import ModelSettings
@@ -31,11 +35,14 @@ def create_container() -> AsyncContainer:
     provider.provide(
         MlCategoryClassifier, provides=ICategoryClassifier, scope=Scope.APP
     )
+    provider.provide(lambda: AsyncIOScheduler(), provides=BaseScheduler, scope=Scope.APP)
 
     container = make_async_container(
         provider,
         DbConnectionProvider(),
         AuthServicesProvider(),
+        UserServicesProvider(),
+        TransactionServicesProvider(),
         FastapiProvider(),
     )
     return container

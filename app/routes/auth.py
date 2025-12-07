@@ -11,7 +11,7 @@ from app.schemas.auth import (
     UserRetrieveSchema,
     AuthenticationResponseSchema,
 )
-from app.services.auth import LoginUserInteractor, RegisterUserInteractor
+from app.services.auth import UserLoginInteractor, UserRegisterInteractor
 from app.services.providers.protocols.token_provider import ITokenProvider
 from app.deps.auth import CurrentUser
 
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/auth", tags=["auth"], route_class=DishkaRoute)
 @router.post("/register")
 async def register(
     data: RegisterSchema,
-    service: FromDishka[RegisterUserInteractor],
+    service: FromDishka[UserRegisterInteractor],
     token_encoder: FromDishka[ITokenProvider],
 ) -> AuthenticationResponseSchema:
     user = UserRetrieveSchema.model_validate(await service(data))
@@ -35,7 +35,7 @@ async def register(
 @router.post("/login")
 async def login(
     data: Annotated[LoginSchema, Body()],
-    service: FromDishka[LoginUserInteractor],
+    service: FromDishka[UserLoginInteractor],
     token_encoder: FromDishka[ITokenProvider],
 ) -> AuthenticationResponseSchema:
     user = UserRetrieveSchema.model_validate(await service(data))

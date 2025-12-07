@@ -23,4 +23,9 @@ class DbConnectionProvider(Provider):
         self, session_maker: async_sessionmaker[AsyncSession]
     ) -> AsyncIterable[AsyncSession]:
         async with session_maker() as session:
-            yield session
+            try:
+                yield session
+                await session.commit()
+            except:
+                await session.rollback()
+                raise

@@ -1,7 +1,6 @@
 import logging
 import uuid
 
-from sqlalchemy import ColumnElement
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,7 +13,7 @@ from app.services.users import RetrieveUserInteractor
 logger = logging.getLogger(__name__)
 
 
-class RegisterUserInteractor:
+class UserRegisterInteractor:
     def __init__(
         self,
         session: AsyncSession,
@@ -51,7 +50,7 @@ class RegisterUserInteractor:
         return user
 
 
-class LoginUserInteractor:
+class UserLoginInteractor:
     def __init__(
         self,
         session: AsyncSession,

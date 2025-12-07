@@ -2,15 +2,16 @@ import logging
 
 from dishka import FromDishka, Provider, Scope, provide
 from dishka.integrations.fastapi import inject
-from fastapi import Depends
+from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from typing import Annotated
+from typing import Annotated, NewType, cast
+
+from fastapi.security.utils import get_authorization_scheme_param
 
 from app.models import User
-
 from app.services.auth import (
-    LoginUserInteractor,
-    RegisterUserInteractor,
+    UserLoginInteractor,
+    UserRegisterInteractor,
 )
 from app.services.users import RetrieveUserInteractor
 from app.services.auth.errors import AuthenticationError
@@ -21,13 +22,10 @@ oauth2_scheme = HTTPBearer()
 logger = logging.getLogger(__name__)
 
 
-@inject
-async def current_user(
-    token: Annotated[HTTPAuthorizationCredentials, Depends(oauth2_scheme)],
-    token_encoder: FromDishka[ITokenProvider],
-    retrieve_user_interactor: FromDishka[RetrieveUserInteractor],
-) -> User:
-    logger.debug("Request with token %s", repr(token))
+async def _current_user(
+    token: HTTPAuthorizationCredentials,
+    token_encoder: ITokenProvider,
+    retrieve_user_interactor: RetrieveUserInteractor) -> User:
     if not token or not token.credentials:
         raise AuthenticationError()
     try:
@@ -41,13 +39,51 @@ async def current_user(
         raise AuthenticationError()
     return db_user
 
+@inject
+async def get_current_user(credentials: Annotated[HTTPAuthorizationCredentials, Depends(oauth2_scheme)],
+                           token_provider: FromDishka[ITokenProvider],
+                           retrieve_user_interactor: FromDishka[RetrieveUserInteractor]) -> User:
+    return await _current_user(credentials, token_provider, retrieve_user_interactor)
 
-CurrentUser = Annotated[User, Depends(current_user)]
+
+_CurrentUser = NewType("_CurrentUser", User)
+CurrentUserDependency = Depends(get_current_user)
+CurrentUser = Annotated[_CurrentUser, CurrentUserDependency]
 
 
 class AuthServicesProvider(Provider):
     scope = Scope.REQUEST
 
-    retrieve = provide(RetrieveUserInteractor)
-    register = provide(RegisterUserInteractor)
-    login = provide(LoginUserInteractor)
+    register = provide(UserRegisterInteractor)
+    login = provide(UserLoginInteractor)
+
+    header_name = "Authorization"
+    header_prefix = "bearer"
+
+    @provide
+    async def get_credentials(self, request: Request) -> HTTPAuthorizationCredentials:
+        header = request.headers.get(self.header_name)
+        if not header:
+            raise AuthenticationError()
+        scheme, credentials = get_authorization_scheme_param(header)
+        if not scheme.lower() == self.header_prefix:
+            raise AuthenticationError()
+        return HTTPAuthorizationCredentials(scheme=scheme, credentials=credentials)
+
+    @provide
+    async def get_current_user(self,
+                               token: HTTPAuthorizationCredentials,
+                               token_encoder: ITokenProvider,
+                               retrieve_user_interactor: RetrieveUserInteractor) -> _CurrentUser:
+        return cast(
+            _CurrentUser,
+            await _current_user(
+                token=token,
+                token_encoder=token_encoder,
+                retrieve_user_interactor=retrieve_user_interactor
+            )
+        )
+
+
+
+

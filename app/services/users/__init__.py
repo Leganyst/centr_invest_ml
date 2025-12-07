@@ -1,5 +1,6 @@
 from typing import Iterable
 
+from dishka import Provider, Scope, provide
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,3 +27,9 @@ class RetrieveUserInteractor:
 
     async def get(self, query: FilterType) -> User | None:
         return await self.session.scalar(select(User).where(query).limit(1))
+
+
+class UserServicesProvider(Provider):
+    scope = Scope.REQUEST
+
+    retrieve = provide(RetrieveUserInteractor)
